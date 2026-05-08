@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aichat.modules.chat.mapper.ChatMessageMapper">
+
+    <select id="selectBySessionIdOrderBySeqNo" resultType="com.example.aichat.modules.chat.entity.ChatMessageDO">
+        SELECT *
+        FROM chat_message
+        WHERE session_id = #{sessionId}
+        ORDER BY seq_no ASC
+    </select>
+
+    <select id="selectLatestMessages" resultType="com.example.aichat.modules.chat.entity.ChatMessageDO">
+        SELECT *
+        FROM chat_message
+        WHERE session_id = #{sessionId}
+        ORDER BY seq_no DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectMaxSeqNo" resultType="java.lang.Integer">
+        SELECT COALESCE(MAX(seq_no), 0)
+        FROM chat_message
+        WHERE session_id = #{sessionId}
+    </select>
+
+</mapper>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aichat.modules.model.mapper.ApiCallLogMapper">
+
+    <select id="selectByRequestId" resultType="com.example.aichat.modules.model.entity.ApiCallLogDO">
+        SELECT *
+        FROM api_call_log
+        WHERE request_id = #{requestId}
+        LIMIT 1
+    </select>
+
+    <select id="selectRecentFailures" resultType="com.example.aichat.modules.model.entity.ApiCallLogDO">
+        SELECT *
+        FROM api_call_log
+        WHERE success_flag = 0
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

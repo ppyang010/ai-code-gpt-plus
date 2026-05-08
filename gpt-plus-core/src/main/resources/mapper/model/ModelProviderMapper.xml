@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.aichat.modules.model.mapper.ModelProviderMapper">
+
+    <select id="selectByProviderCode" resultType="com.example.aichat.modules.model.entity.ModelProviderDO">
+        SELECT *
+        FROM model_provider
+        WHERE provider_code = #{providerCode}
+        LIMIT 1
+    </select>
+
+    <select id="selectEnabledProviders" resultType="com.example.aichat.modules.model.entity.ModelProviderDO">
+        SELECT *
+        FROM model_provider
+        WHERE status = 1
+        ORDER BY sort_no ASC, id ASC
+    </select>
+
+</mapper>

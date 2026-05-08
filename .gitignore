@@ -1,0 +1,46 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IntelliJ IDEA
+.idea/
+*.iml
+.fleet/
+
+# Maven / Java
+target/
+out/
+*.class
+*.log
+*.jar
+*.war
+*.ear
+.mvn/timing.properties
+
+# Local env files
+.env
+.env.*
+gpt-plus-core/src/main/resources/application-local.yml
+*.local
+
+# VS Code
+.vscode/
+
+# Node / Frontend
+node_modules/
+dist/
+.vite/
+.cache/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Temporary files
+tmp/
+temp/
+*.swp
+*.swo
