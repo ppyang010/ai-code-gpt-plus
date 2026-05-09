@@ -6,7 +6,7 @@ public interface ChatModelClient {
 
     boolean supports(ChatModelRequest request);
 
-    ChatModelResponse streamChat(ChatModelRequest request, Consumer<String> deltaConsumer);
+    ChatModelResponse streamChat(ChatModelRequest request, Consumer<ChatModelStreamChunk> chunkConsumer);
 
     String clientCode();
 }

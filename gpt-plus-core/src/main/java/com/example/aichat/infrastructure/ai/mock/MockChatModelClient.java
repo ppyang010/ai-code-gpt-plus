@@ -4,6 +4,7 @@ import com.example.aichat.common.enums.ChatModeEnum;
 import com.example.aichat.infrastructure.ai.ChatModelClient;
 import com.example.aichat.infrastructure.ai.ChatModelRequest;
 import com.example.aichat.infrastructure.ai.ChatModelResponse;
+import com.example.aichat.infrastructure.ai.ChatModelStreamChunk;
 import java.util.function.Consumer;
 import org.springframework.stereotype.Component;
 
@@ -16,7 +17,7 @@ public class MockChatModelClient implements ChatModelClient {
     }
 
     @Override
-    public ChatModelResponse streamChat(ChatModelRequest request, Consumer<String> deltaConsumer) {
+    public ChatModelResponse streamChat(ChatModelRequest request, Consumer<ChatModelStreamChunk> chunkConsumer) {
         String currentMode = ChatModeEnum.fromCodeOrDefault(request.getModeCode()).getCode();
         String content = String.format(
                 "This is a mock streaming response for frontend integration.%n"
@@ -31,14 +32,16 @@ public class MockChatModelClient implements ChatModelClient {
         );
 
         for (String chunk : content.split("\n")) {
-            deltaConsumer.accept(chunk + "\n");
+            chunkConsumer.accept(new ChatModelStreamChunk(chunk + "\n", false));
         }
+        chunkConsumer.accept(new ChatModelStreamChunk("", true));
 
         ChatModelResponse response = new ChatModelResponse();
         response.setModelCode(request.getModelCode() != null ? request.getModelCode() : "mock-model");
         response.setModelName(request.getModelName() != null ? request.getModelName() : "Mock Model");
         response.setContent(content);
         response.setFinishReason("stop");
+        response.setHttpStatus(200);
         response.setPromptTokens(120);
         response.setCompletionTokens(180);
         response.setTotalTokens(300);

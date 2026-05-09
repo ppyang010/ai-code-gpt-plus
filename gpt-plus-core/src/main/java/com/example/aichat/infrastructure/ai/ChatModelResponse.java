@@ -2,6 +2,10 @@ package com.example.aichat.infrastructure.ai;
 
 public class ChatModelResponse {
 
+    private String requestId;
+    private Integer httpStatus;
+    private String errorCode;
+    private String errorMessage;
     private String modelCode;
     private String modelName;
     private String content;
@@ -9,6 +13,38 @@ public class ChatModelResponse {
     private Integer promptTokens;
     private Integer completionTokens;
     private Integer totalTokens;
+
+    public String getRequestId() {
+        return requestId;
+    }
+
+    public void setRequestId(String requestId) {
+        this.requestId = requestId;
+    }
+
+    public Integer getHttpStatus() {
+        return httpStatus;
+    }
+
+    public void setHttpStatus(Integer httpStatus) {
+        this.httpStatus = httpStatus;
+    }
+
+    public String getErrorCode() {
+        return errorCode;
+    }
+
+    public void setErrorCode(String errorCode) {
+        this.errorCode = errorCode;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
 
     public String getModelCode() {
         return modelCode;

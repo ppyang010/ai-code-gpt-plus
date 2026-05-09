@@ -1,6 +1,6 @@
 # GPT Plus 项目规则
 
-最后更新：2026-05-08
+最后更新：2026-05-09
 
 ## 目的
 
@@ -48,6 +48,15 @@
 - 完成任务时，不仅要打钩，还要补充完成时间
 - 如果任务是旧任务且原先没有时间记录，可以维持不变；但从本规则生效后新增的任务，应带时间信息
 
+### 5. API 测试文档要独立维护
+
+- 当前项目的接口联调规则独立维护在 [api-test-rules.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/rules/api-test-rules.md)
+- 当前项目的具体接口测试用例维护在 [docs/backend/api-test-cases.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/api-test-cases.md)
+- 当前项目的实际接口测试结果维护在 [docs/backend/api-test-results/README.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/api-test-results/README.md)
+- 新增重要接口、修改接口行为、补充关键副作用校验后，应同步更新接口测试文档
+- 新增一次真实联调、回归或验证后，应同步补对应的结果文件
+- 接口测试状态必须真实，只有跑通过的内容才能写进结果记录
+
 ## 当前执行方式
 
 当前项目按以下方式维护任务：
@@ -56,6 +65,7 @@
 - 后端任务清单： [docs/backend/task.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/task.md)
 - 前端任务清单： [docs/frontend/task.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/frontend/task.md)
 - 项目规则： [project-rules.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/rules/project-rules.md)
+- API 测试规则： [api-test-rules.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/rules/api-test-rules.md)
 - 数据库文档： [mysql-schema.sql](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/db/mysql-schema.sql)
 - 接口与后端设计文档：`docs/backend`
 

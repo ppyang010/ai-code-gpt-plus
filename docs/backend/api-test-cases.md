@@ -1,10 +1,12 @@
 # 后端接口测试用例
 
-最后更新：2026-05-05
+最后更新：2026-05-09
 
 ## 说明
 
 - 本文档用于记录当前项目后端接口的本地联调测试用例。
+- 本文档的维护方式遵循 [api-test-rules.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/rules/api-test-rules.md)。
+- 实际执行结果单独维护在 [api-test-results/README.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/api-test-results/README.md)。
 - 默认后端项目目录为：`/Users/ccy/CcyProjects/ai-code-gpt-plus/gpt-plus-core`
 - 默认通过 `jenv exec` 启动后端，避免误用本机全局 JDK 8。
 - 默认服务地址为：`http://127.0.0.1:8080`
@@ -13,7 +15,7 @@
 
 ```bash
 cd /Users/ccy/CcyProjects/ai-code-gpt-plus/gpt-plus-core
-jenv exec mvn spring-boot:run
+jenv exec mvn spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
 启动成功后，日志中应看到：
@@ -27,6 +29,7 @@ jenv exec mvn spring-boot:run
 - 数据源已配置到 [application.yml](/Users/ccy/CcyProjects/ai-code-gpt-plus/gpt-plus-core/src/main/resources/application.yml)
 - 数据库初始化 SQL 已执行
 - 当前临时用户身份通过请求头 `X-User-Id` 传入
+- 如果要验证真实 DeepSeek 调用，需保证 `model_provider` / `model_config` 中已有启用的 `deepseek` / `deepseek-chat` 配置
 
 ## 测试用例
 
@@ -80,10 +83,6 @@ curl -s "http://127.0.0.1:8080/api/chat/session/list?pageNo=1&pageSize=10" \
   "message": "success"
 }
 ```
-
-#### 当前状态
-
-- 已验证通过
 
 ### 3. 创建会话
 
@@ -150,7 +149,8 @@ curl -N -X POST "http://127.0.0.1:8080/api/chat/message/send" \
   -H "X-User-Id: 1" \
   -d '{
     "sessionId": 1,
-    "content": "帮我写一个 Spring Boot 聊天接口",
+    "modelId": 1,
+    "content": "请用一句话确认你是 DeepSeek 真流式响应。",
     "modeCode": "quick"
   }'
 ```
@@ -163,13 +163,14 @@ curl -N -X POST "http://127.0.0.1:8080/api/chat/message/send" \
   - 多个 `message_delta`
   - `message_end`
 
-#### 当前实现说明
+#### 接口行为说明
 
-- 当前还是 mock SSE 输出
-- 但数据库链路已接通
+- 当前接口应返回真实 SSE 增量输出，而不是一次性 mock 返回
 - 会先保存 `user message`
 - 再保存一条 `assistant message` 占位消息
 - 生成结束后会更新 assistant 内容和 token 字段
+- 成功调用后会新增一条 `api_call_log`
+- 成功调用后会新增一条 `user_token_usage`
 
 #### 联调检查点
 
@@ -177,6 +178,8 @@ curl -N -X POST "http://127.0.0.1:8080/api/chat/message/send" \
   - 一条 `role = user`
   - 一条 `role = assistant`
 - `chat_session.last_message_at` 被更新
+- `api_call_log.success_flag = 1`
+- `user_token_usage.total_tokens` 与 `chat_message.total_tokens` 一致
 
 ### 6. 修改会话标题
 
@@ -250,10 +253,3 @@ SELECT id, session_id, user_id, role, seq_no, model_id, status, finish_reason, c
 FROM chat_message
 ORDER BY id DESC;
 ```
-
-## 当前测试结论
-
-- 后端可以编译通过
-- Spring Boot 服务可以启动成功
-- 会话列表接口已验证通过
-- 其余接口可继续按本文档顺序联调

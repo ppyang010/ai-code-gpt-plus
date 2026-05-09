@@ -1,6 +1,6 @@
 # 后端本地环境与启动说明
 
-最后更新：2026-05-07
+最后更新：2026-05-08
 
 ## 项目目录
 
@@ -81,6 +81,7 @@ mvn -version
 当前行为如下：
 
 - 如果所选模型编码以 `deepseek` 开头，并且已配置 `DEEPSEEK_API_KEY`，则优先走 DeepSeek 客户端
+- DeepSeek 客户端当前已经改为真实 SSE 流式读取，而不是一次性非流式回包再转发
 - 如果没有配置 `DEEPSEEK_API_KEY`，则自动回退到 mock 客户端，保证本地开发链路可用
 
 ## DeepSeek 配置
@@ -102,6 +103,11 @@ export DEEPSEEK_DEFAULT_MODEL=deepseek-chat
 - 编译不受影响
 - 启动不受影响
 - 模型调用默认回退到 mock 客户端
+
+如果已经配置 `DEEPSEEK_API_KEY`：
+
+- 可以直接验证真实 DeepSeek 流式响应
+- 发送消息成功后会同步落库 `chat_message`、`api_call_log`、`user_token_usage`
 
 ## 本地密钥保存方式
 
@@ -169,8 +175,27 @@ jenv exec mvn -q -DskipTests compile
 
 ```bash
 cd /Users/ccy/CcyProjects/ai-code-gpt-plus/gpt-plus-core
-jenv exec mvn spring-boot:run
+jenv exec mvn spring-boot:run -Dspring-boot.run.profiles=local
 ```
+
+### 5. 验证真实 DeepSeek 流式输出
+
+```bash
+curl -N -X POST "http://127.0.0.1:8080/api/chat/message/send" \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: 1" \
+  -d '{
+    "sessionId": 1,
+    "modelId": 1,
+    "content": "请用一句话确认你是 DeepSeek 真流式响应。"
+  }'
+```
+
+期望看到：
+
+- 先收到 `message_start`
+- 持续收到多个 `message_delta`
+- 最后收到 `message_end`
 
 ## 当前已知问题
 

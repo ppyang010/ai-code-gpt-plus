@@ -6,9 +6,13 @@ import com.example.aichat.common.enums.MessageStatusEnum;
 import com.example.aichat.common.exception.BizException;
 import com.example.aichat.infrastructure.ai.ChatModelClient;
 import com.example.aichat.infrastructure.ai.ChatModelClientRegistry;
+import com.example.aichat.infrastructure.ai.ChatModelClientException;
 import com.example.aichat.infrastructure.ai.ChatModelMessage;
 import com.example.aichat.infrastructure.ai.ChatModelRequest;
 import com.example.aichat.infrastructure.ai.ChatModelResponse;
+import com.example.aichat.infrastructure.ai.ChatModelStreamChunk;
+import com.example.aichat.modules.billing.entity.UserTokenUsageDO;
+import com.example.aichat.modules.billing.mapper.UserTokenUsageMapper;
 import com.example.aichat.modules.chat.dto.ChatMessageRegenerateRequest;
 import com.example.aichat.modules.chat.dto.ChatMessageSendRequest;
 import com.example.aichat.modules.chat.dto.stream.ChatStreamDeltaEvent;
@@ -23,43 +27,61 @@ import com.example.aichat.modules.chat.service.ChatMessageService;
 import com.example.aichat.modules.chat.service.ChatPromptResolver;
 import com.example.aichat.modules.chat.vo.ChatMessageItemVO;
 import com.example.aichat.modules.chat.vo.ChatMessageListVO;
+import com.example.aichat.modules.model.entity.ApiCallLogDO;
 import com.example.aichat.modules.model.entity.ModelConfigDO;
+import com.example.aichat.modules.model.mapper.ApiCallLogMapper;
 import com.example.aichat.modules.model.mapper.ModelConfigMapper;
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class ChatMessageServiceImpl implements ChatMessageService {
 
     private static final int SESSION_STATUS_ACTIVE = 1;
+    private static final Logger log = LoggerFactory.getLogger(ChatMessageServiceImpl.class);
 
     private final ChatPromptResolver chatPromptResolver;
     private final ChatSessionMapper chatSessionMapper;
     private final ChatMessageMapper chatMessageMapper;
     private final ModelConfigMapper modelConfigMapper;
     private final ChatModelClientRegistry chatModelClientRegistry;
+    private final ApiCallLogMapper apiCallLogMapper;
+    private final UserTokenUsageMapper userTokenUsageMapper;
+    private final ObjectMapper objectMapper;
 
     public ChatMessageServiceImpl(
             ChatPromptResolver chatPromptResolver,
             ChatSessionMapper chatSessionMapper,
             ChatMessageMapper chatMessageMapper,
             ModelConfigMapper modelConfigMapper,
-            ChatModelClientRegistry chatModelClientRegistry
+            ChatModelClientRegistry chatModelClientRegistry,
+            ApiCallLogMapper apiCallLogMapper,
+            UserTokenUsageMapper userTokenUsageMapper,
+            ObjectMapper objectMapper
     ) {
         this.chatPromptResolver = chatPromptResolver;
         this.chatSessionMapper = chatSessionMapper;
         this.chatMessageMapper = chatMessageMapper;
         this.modelConfigMapper = modelConfigMapper;
         this.chatModelClientRegistry = chatModelClientRegistry;
+        this.apiCallLogMapper = apiCallLogMapper;
+        this.userTokenUsageMapper = userTokenUsageMapper;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -104,6 +126,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         int nextSeqNo = nextSeqNo(session.getId());
         ChatMessageDO userMessage = buildUserMessage(userId, session.getId(), request.getContent(), nextSeqNo);
         chatMessageMapper.insert(userMessage);
+        chatSessionMapper.updateLastMessageAt(session.getId(), LocalDateTime.now());
 
         streamMockAnswer(
                 userId,
@@ -135,7 +158,12 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 sendStart(session.getId(), assistantMessage.getId(), model, emitter);
 
                 ChatModelClient chatModelClient = chatModelClientRegistry.resolve(modelRequest);
-                ChatModelResponse modelResponse = chatModelClient.streamChat(modelRequest, delta -> emitDelta(emitter, assistantMessage.getId(), delta));
+                boolean persistProviderUsage = shouldPersistProviderUsage(model, chatModelClient);
+                long startedAt = System.currentTimeMillis();
+                ChatModelResponse modelResponse = chatModelClient.streamChat(
+                        modelRequest,
+                        chunk -> emitChunk(emitter, assistantMessage.getId(), chunk)
+                );
 
                 assistantMessage.setContent(modelResponse.getContent());
                 assistantMessage.setFinishReason(modelResponse.getFinishReason());
@@ -145,6 +173,16 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 assistantMessage.setTotalTokens(defaultInt(modelResponse.getTotalTokens()));
                 chatMessageMapper.updateById(assistantMessage);
                 chatSessionMapper.updateLastMessageAt(session.getId(), LocalDateTime.now());
+                persistSuccessUsage(
+                        persistProviderUsage,
+                        userId,
+                        session,
+                        model,
+                        modelRequest,
+                        assistantMessage,
+                        modelResponse,
+                        startedAt
+                );
 
                 ChatStreamEndEvent endEvent = new ChatStreamEndEvent();
                 endEvent.setMessageId(assistantMessage.getId());
@@ -162,6 +200,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                     if (assistantMessage.getId() != null) {
                         chatMessageMapper.updateById(assistantMessage);
                     }
+                    persistFailureUsage(userId, session, model, modelRequest, assistantMessage, exception);
                     ChatStreamErrorEvent errorEvent = new ChatStreamErrorEvent();
                     errorEvent.setMessageId(assistantMessage.getId());
                     errorEvent.setErrorCode("CHAT_STREAM_ERROR");
@@ -267,13 +306,13 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 .collect(Collectors.toList());
     }
 
-    private void emitDelta(SseEmitter emitter, Long messageId, String delta) {
-        if (delta == null) {
+    private void emitChunk(SseEmitter emitter, Long messageId, ChatModelStreamChunk chunk) {
+        if (chunk == null || chunk.isDone()) {
             return;
         }
         ChatStreamDeltaEvent deltaEvent = new ChatStreamDeltaEvent();
         deltaEvent.setMessageId(messageId);
-        deltaEvent.setDelta(delta);
+        deltaEvent.setDelta(chunk.getDelta());
         try {
             emitter.send(SseEmitter.event().name("message_delta").data(deltaEvent));
         } catch (Exception exception) {
@@ -283,6 +322,214 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
     private int defaultInt(Integer value) {
         return value == null ? 0 : value;
+    }
+
+    private boolean shouldPersistProviderUsage(ModelConfigDO model, ChatModelClient chatModelClient) {
+        return model != null
+                && model.getId() != null
+                && model.getProviderId() != null
+                && chatModelClient != null
+                && !"mock".equals(chatModelClient.clientCode());
+    }
+
+    private void persistSuccessUsage(
+            boolean persistProviderUsage,
+            Long userId,
+            ChatSessionDO session,
+            ModelConfigDO model,
+            ChatModelRequest modelRequest,
+            ChatMessageDO assistantMessage,
+            ChatModelResponse modelResponse,
+            long startedAt
+    ) {
+        if (!persistProviderUsage) {
+            return;
+        }
+        try {
+            ApiCallLogDO apiCallLog = buildSuccessApiCallLog(
+                    userId,
+                    session,
+                    model,
+                    modelRequest,
+                    assistantMessage,
+                    modelResponse,
+                    startedAt
+            );
+            apiCallLogMapper.insert(apiCallLog);
+            userTokenUsageMapper.insert(buildUserTokenUsage(userId, session, model, assistantMessage, modelResponse, apiCallLog.getId()));
+        } catch (Exception exception) {
+            log.warn("Failed to persist model usage log for messageId={}", assistantMessage.getId(), exception);
+        }
+    }
+
+    private void persistFailureUsage(
+            Long userId,
+            ChatSessionDO session,
+            ModelConfigDO model,
+            ChatModelRequest modelRequest,
+            ChatMessageDO assistantMessage,
+            Exception exception
+    ) {
+        if (model == null || model.getId() == null || model.getProviderId() == null) {
+            return;
+        }
+        try {
+            apiCallLogMapper.insert(buildFailureApiCallLog(userId, session, model, modelRequest, assistantMessage, exception));
+        } catch (Exception persistException) {
+            log.warn("Failed to persist failure model log for messageId={}", assistantMessage.getId(), persistException);
+        }
+    }
+
+    private ApiCallLogDO buildSuccessApiCallLog(
+            Long userId,
+            ChatSessionDO session,
+            ModelConfigDO model,
+            ChatModelRequest modelRequest,
+            ChatMessageDO assistantMessage,
+            ChatModelResponse modelResponse,
+            long startedAt
+    ) {
+        ApiCallLogDO entity = new ApiCallLogDO();
+        entity.setUserId(userId);
+        entity.setSessionId(session.getId());
+        entity.setMessageId(assistantMessage.getId());
+        entity.setProviderId(model.getProviderId());
+        entity.setModelId(model.getId());
+        entity.setRequestId(modelResponse.getRequestId());
+        entity.setIsStream(1);
+        entity.setSuccessFlag(1);
+        entity.setHttpStatus(defaultInt(modelResponse.getHttpStatus()));
+        entity.setLatencyMs(toLatencyMs(startedAt));
+        entity.setPromptTokens(defaultInt(modelResponse.getPromptTokens()));
+        entity.setCompletionTokens(defaultInt(modelResponse.getCompletionTokens()));
+        entity.setTotalTokens(defaultInt(modelResponse.getTotalTokens()));
+        entity.setEstimatedCost(BigDecimal.ZERO);
+        entity.setRequestPayload(toJsonSafely(buildRequestPayload(modelRequest)));
+        entity.setResponsePayload(toJsonSafely(buildSuccessResponsePayload(modelResponse)));
+        return entity;
+    }
+
+    private ApiCallLogDO buildFailureApiCallLog(
+            Long userId,
+            ChatSessionDO session,
+            ModelConfigDO model,
+            ChatModelRequest modelRequest,
+            ChatMessageDO assistantMessage,
+            Exception exception
+    ) {
+        ApiCallLogDO entity = new ApiCallLogDO();
+        entity.setUserId(userId);
+        entity.setSessionId(session.getId());
+        entity.setMessageId(assistantMessage.getId());
+        entity.setProviderId(model.getProviderId());
+        entity.setModelId(model.getId());
+        entity.setIsStream(1);
+        entity.setSuccessFlag(0);
+        entity.setHttpStatus(resolveHttpStatus(exception));
+        entity.setLatencyMs(null);
+        entity.setPromptTokens(0);
+        entity.setCompletionTokens(0);
+        entity.setTotalTokens(0);
+        entity.setEstimatedCost(BigDecimal.ZERO);
+        entity.setErrorCode(resolveErrorCode(exception));
+        entity.setErrorMessage(truncate(resolveErrorMessage(exception), 1000));
+        entity.setRequestPayload(toJsonSafely(buildRequestPayload(modelRequest)));
+        entity.setResponsePayload(resolveFailureResponsePayload(exception));
+        return entity;
+    }
+
+    private UserTokenUsageDO buildUserTokenUsage(
+            Long userId,
+            ChatSessionDO session,
+            ModelConfigDO model,
+            ChatMessageDO assistantMessage,
+            ChatModelResponse modelResponse,
+            Long apiCallLogId
+    ) {
+        UserTokenUsageDO entity = new UserTokenUsageDO();
+        entity.setUserId(userId);
+        entity.setSessionId(session.getId());
+        entity.setMessageId(assistantMessage.getId());
+        entity.setApiCallLogId(apiCallLogId);
+        entity.setProviderId(model.getProviderId());
+        entity.setModelId(model.getId());
+        entity.setPromptTokens(defaultInt(modelResponse.getPromptTokens()));
+        entity.setCompletionTokens(defaultInt(modelResponse.getCompletionTokens()));
+        entity.setTotalTokens(defaultInt(modelResponse.getTotalTokens()));
+        entity.setEstimatedCost(BigDecimal.ZERO);
+        entity.setStatDate(LocalDate.now());
+        return entity;
+    }
+
+    private Integer toLatencyMs(long startedAt) {
+        long latency = System.currentTimeMillis() - startedAt;
+        return latency > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) latency;
+    }
+
+    private Map<String, Object> buildRequestPayload(ChatModelRequest modelRequest) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("modelCode", modelRequest.getModelCode());
+        payload.put("modeCode", modelRequest.getModeCode());
+        payload.put("contextMessageCount", modelRequest.getMessages() == null ? 0 : modelRequest.getMessages().size());
+        payload.put("systemPromptPreview", truncate(modelRequest.getSystemPrompt(), 500));
+        payload.put("userContentPreview", truncate(modelRequest.getUserContent(), 500));
+        return payload;
+    }
+
+    private Map<String, Object> buildSuccessResponsePayload(ChatModelResponse modelResponse) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("requestId", modelResponse.getRequestId());
+        payload.put("httpStatus", modelResponse.getHttpStatus());
+        payload.put("finishReason", modelResponse.getFinishReason());
+        payload.put("contentPreview", truncate(modelResponse.getContent(), 500));
+        payload.put("promptTokens", defaultInt(modelResponse.getPromptTokens()));
+        payload.put("completionTokens", defaultInt(modelResponse.getCompletionTokens()));
+        payload.put("totalTokens", defaultInt(modelResponse.getTotalTokens()));
+        return payload;
+    }
+
+    private Integer resolveHttpStatus(Exception exception) {
+        if (exception instanceof ChatModelClientException modelClientException) {
+            return modelClientException.getHttpStatus();
+        }
+        return null;
+    }
+
+    private String resolveErrorCode(Exception exception) {
+        if (exception instanceof ChatModelClientException modelClientException) {
+            return modelClientException.getErrorCode();
+        }
+        if (exception instanceof BizException bizException) {
+            return bizException.getMessage();
+        }
+        return "CHAT_STREAM_ERROR";
+    }
+
+    private String resolveErrorMessage(Exception exception) {
+        return exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+    }
+
+    private String resolveFailureResponsePayload(Exception exception) {
+        if (exception instanceof ChatModelClientException modelClientException) {
+            return truncate(modelClientException.getResponsePayload(), 1000);
+        }
+        return null;
+    }
+
+    private String toJsonSafely(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception exception) {
+            log.warn("Failed to serialize model payload", exception);
+            return null;
+        }
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (!StringUtils.hasText(value) || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
     }
 
     private Map<Long, ModelConfigDO> loadModelMap(Set<Long> modelIds) {
