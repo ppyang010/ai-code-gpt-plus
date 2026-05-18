@@ -11,7 +11,7 @@
 - `TypeScript`
 - `Pinia`
 - `Vue Router`
-- `Element Plus`
+- `TDesign Vue Next`
 
 ## 聊天相关配套能力
 
@@ -20,6 +20,8 @@
 - 流式通信：`SSE`
 - Markdown 渲染：`markdown-it`
 - 代码高亮：`highlight.js`
+- AI 聊天 UI：`@tdesign-vue-next/chat`
+- 代码质量：`ESLint + Prettier`
 
 ## 各技术的作用说明
 
@@ -53,9 +55,9 @@
 - 负责不同页面地址和页面组件之间的映射
 - 例如：`/login`、`/chat`、`/settings`
 
-### Element Plus
+### TDesign Vue Next
 
-- Vue 3 常用 UI 组件库
+- Vue 3 UI 组件库
 - 提供按钮、表单、弹窗、下拉框、表格等基础组件
 - 能加快后台页、登录页、设置页等界面的开发速度
 
@@ -84,10 +86,12 @@
 - `TypeScript`：负责接口类型和组件类型约束
 - `Pinia`：负责全局状态管理
 - `Vue Router`：负责页面切换
-- `Element Plus`：负责基础 UI 组件
+- `TDesign Vue Next`：负责基础 UI 组件
+- `@tdesign-vue-next/chat`：负责对话列表、聊天内容、操作栏和输入框等 AI Chat 组件
 - `SSE`：负责 AI 流式回复
 - `markdown-it`：负责渲染 AI 的 Markdown 回答
 - `highlight.js`：负责高亮 AI 回答中的代码块
+- `ESLint + Prettier`：负责前端代码检查和格式统一
 
 ## 说明
 

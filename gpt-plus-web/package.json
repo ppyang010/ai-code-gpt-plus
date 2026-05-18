@@ -1,0 +1,41 @@
+{
+  "name": "gpt-plus-web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "lint": "eslint .",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tdesign-vue-next/chat": "^0.5.2",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.0",
+    "pinia": "^3.0.3",
+    "tdesign-icons-vue-next": "^0.4.4",
+    "tdesign-vue-next": "^1.20.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.0.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "@vue/tsconfig": "^0.7.0",
+    "eslint": "^10.4.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.9.1",
+    "prettier": "^3.8.3",
+    "sass": "^1.89.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.59.3",
+    "vite": "^6.3.5",
+    "vue-eslint-parser": "^10.4.0",
+    "vue-tsc": "^2.2.10"
+  }
+}
