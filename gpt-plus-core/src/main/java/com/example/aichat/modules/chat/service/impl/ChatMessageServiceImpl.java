@@ -107,17 +107,29 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         return response;
     }
 
+    /**
+     * 发送一条用户消息，并通过 SSE 异步推送 assistant 的流式回答。
+     *
+     * <p>该方法只负责同步阶段的请求校验、会话/模型解析、用户消息落库和异步任务派发；
+     * 真正的模型调用、assistant 消息落库、增量事件推送、token 统计和供应商调用日志，
+     * 都在 {@link #streamAssistantAnswer(Long, ChatSessionDO, ModelConfigDO, ChatModelRequest, int, SseEmitter)}
+     * 中完成。这样可以让控制器尽快拿到 {@link SseEmitter}，避免 HTTP 请求线程被模型流式响应长期占用。</p>
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void sendMessage(Long userId, ChatMessageSendRequest request, SseEmitter emitter) {
+        // 会话是消息归属、上下文读取和历史展示的核心维度；没有会话 id 时直接按会话不存在处理。
         if (request.getSessionId() == null) {
             throw new BizException(ErrorCode.CHAT_SESSION_NOT_FOUND);
         }
+        // 空消息不会进入模型调用，也不写入 chat_message，避免产生无意义的用户记录和上下文污染。
         if (!StringUtils.hasText(request.getContent())) {
             throw new BizException(ErrorCode.CHAT_MESSAGE_EMPTY);
         }
 
+        // 只允许向当前用户自己的有效会话发送消息；这里也会过滤已删除/非活跃会话。
         ChatSessionDO session = getActiveSession(userId, request.getSessionId());
+        // 优先使用本次请求指定的模型；未指定时回落到会话默认模型，再由 resolveModel 做全局默认兜底。
         ModelConfigDO model = resolveModel(session, request.getModelId());
 
         // 本次请求的系统提示词由模式、会话和请求三层合并，保证模式切换能影响同一会话内的回答策略。
@@ -127,13 +139,19 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 request.getSystemPrompt()
         );
 
+        // 在用户新消息入库前构造模型请求，使本次模型上下文只包含已存在的历史消息；
+        // 当前用户输入通过 userContent 单独传给模型客户端，避免在 messages 中重复出现。
         ChatModelRequest modelRequest = buildModelRequest(session, model, request.getContent(), finalPrompt, request.getModeCode());
 
+        // seq_no 采用同一会话内递增序号：用户消息占当前序号，assistant 回答占下一个序号。
         int nextSeqNo = nextSeqNo(session.getId());
         ChatMessageDO userMessage = buildUserMessage(userId, session.getId(), request.getContent(), nextSeqNo);
+        // 用户消息先落库，保证即使后续模型调用失败，历史里也能保留用户实际发出的内容。
         chatMessageMapper.insert(userMessage);
+        // 更新会话最后活跃时间，列表页可以立刻按最新发送行为排序。
         chatSessionMapper.updateLastMessageAt(session.getId(), LocalDateTime.now());
 
+        // assistant 的占位消息、模型流式调用、SSE 增量推送和最终 token/日志回写都在异步流程里完成。
         streamAssistantAnswer(
                 userId,
                 session,
