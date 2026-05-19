@@ -1,20 +1,28 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import { CHAT_MODEL_OPTIONS, DEFAULT_CHAT_MODEL, findChatModelByCode, findChatModelById } from '@/config/chat-models'
+import {
+  DEFAULT_CHAT_MODEL,
+  FALLBACK_CHAT_MODEL_OPTIONS,
+  findChatModelByCode,
+  findChatModelById,
+  firstAvailableModel,
+} from '@/config/chat-models'
+import { formatErrorMessage } from '@/lib/error-handler'
 import { http } from '@/lib/http'
 import type {
-  ChatSessionDeleteRequest,
   ChatMessageItem,
   ChatMessageListResponse,
   ChatMessageSendRequest,
+  ChatModelOption,
+  ChatSessionCreateResponse,
+  ChatSessionDeleteRequest,
+  ChatSessionListItem,
   ChatSessionUpdateTitleRequest,
   ChatStreamDeltaEvent,
   ChatStreamEndEvent,
   ChatStreamErrorEvent,
   ChatStreamStartEvent,
-  ChatSessionCreateResponse,
-  ChatSessionListItem,
   PageResponse,
 } from '@/types/chat'
 
@@ -39,12 +47,6 @@ export interface ChatMessage {
 }
 
 const EMPTY_SESSION_TITLE = '新会话'
-
-function resolveSessionModel(session: Pick<SessionPreview, 'defaultModelId' | 'defaultModelCode'>) {
-  return (
-    findChatModelById(session.defaultModelId) || findChatModelByCode(session.defaultModelCode) || DEFAULT_CHAT_MODEL
-  )
-}
 
 function formatRelativeTime(value: string | null) {
   if (!value) {
@@ -95,17 +97,52 @@ export const useChatStore = defineStore('chat', () => {
   const isBootstrapping = ref(false)
   const isSessionsLoading = ref(false)
   const isMessagesLoading = ref(false)
+  const isModelsLoading = ref(false)
   const isCreatingSession = ref(false)
   const isUpdatingSessionTitle = ref(false)
   const isDeletingSession = ref(false)
   const sessionActionSessionId = ref<number | null>(null)
   const errorMessage = ref('')
   const messages = ref<ChatMessage[]>([])
+  // 模型列表优先从后端加载；fallback 只用于后端未启动或模型接口异常时保持页面可用。
+  const availableModels = ref<ChatModelOption[]>([...FALLBACK_CHAT_MODEL_OPTIONS])
   const currentSessionTitle = ref(EMPTY_SESSION_TITLE)
   const lastRetryContent = ref('')
 
   const activeSession = computed(() => sessions.value.find((session) => session.id === currentSessionId.value) ?? null)
-  const availableModels = CHAT_MODEL_OPTIONS
+  const currentModelOption = computed(
+    () => findChatModelByCode(availableModels.value, currentModel.value) || firstAvailableModel(availableModels.value),
+  )
+
+  function resolveSessionModel(session: Pick<SessionPreview, 'defaultModelId' | 'defaultModelCode'>) {
+    return (
+      findChatModelById(availableModels.value, session.defaultModelId) ||
+      findChatModelByCode(availableModels.value, session.defaultModelCode) ||
+      firstAvailableModel(availableModels.value)
+    )
+  }
+
+  async function loadModels() {
+    isModelsLoading.value = true
+
+    try {
+      const models = await http.get<ChatModelOption[]>('/model/list')
+      if (models.length > 0) {
+        availableModels.value = models
+      }
+
+      if (!findChatModelByCode(availableModels.value, currentModel.value)) {
+        // 后端模型配置可能变化，当前选中的旧模型不存在时自动切到第一个可用模型。
+        currentModel.value = firstAvailableModel(availableModels.value).code
+      }
+    } catch (error) {
+      errorMessage.value = formatErrorMessage(error, '模型列表加载失败，已使用本地默认模型')
+      availableModels.value = [...FALLBACK_CHAT_MODEL_OPTIONS]
+      currentModel.value = firstAvailableModel(availableModels.value).code
+    } finally {
+      isModelsLoading.value = false
+    }
+  }
 
   async function loadSessions() {
     isSessionsLoading.value = true
@@ -124,7 +161,7 @@ export const useChatStore = defineStore('chat', () => {
         currentSessionId.value = sessions.value[0]?.id ?? null
       }
     } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : 'LOAD_SESSIONS_FAILED'
+      errorMessage.value = formatErrorMessage(error, '会话列表加载失败')
       sessions.value = []
     } finally {
       isSessionsLoading.value = false
@@ -144,12 +181,13 @@ export const useChatStore = defineStore('chat', () => {
       currentSessionTitle.value = response.title || '未命名会话'
       currentMode.value = response.modeCode
       const matchedSession = sessions.value.find((session) => session.id === sessionId)
+      // 消息列表接口只返回 defaultModelId，模型 code/name 优先从会话列表或模型接口缓存补齐。
       currentModel.value = resolveSessionModel({
         defaultModelId: response.defaultModelId ?? matchedSession?.defaultModelId ?? null,
         defaultModelCode: matchedSession?.defaultModelCode ?? null,
       }).code
     } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : 'LOAD_MESSAGES_FAILED'
+      errorMessage.value = formatErrorMessage(error, '消息列表加载失败')
       messages.value = []
     } finally {
       isMessagesLoading.value = false
@@ -159,7 +197,7 @@ export const useChatStore = defineStore('chat', () => {
   async function createSession() {
     isCreatingSession.value = true
     errorMessage.value = ''
-    const selectedModel = findChatModelByCode(currentModel.value) || DEFAULT_CHAT_MODEL
+    const selectedModel = currentModelOption.value
 
     try {
       const created = await http.post<ChatSessionCreateResponse>('/chat/session/create', {
@@ -168,7 +206,7 @@ export const useChatStore = defineStore('chat', () => {
         defaultModelId: selectedModel.id,
       })
 
-      const createdModel = findChatModelById(created.defaultModelId) || selectedModel
+      const createdModel = findChatModelById(availableModels.value, created.defaultModelId) || selectedModel
 
       const nextSession: SessionPreview = {
         id: created.sessionId,
@@ -188,7 +226,7 @@ export const useChatStore = defineStore('chat', () => {
       await loadMessages(created.sessionId)
       return created.sessionId
     } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : 'CREATE_SESSION_FAILED'
+      errorMessage.value = formatErrorMessage(error, '创建会话失败')
       return null
     } finally {
       isCreatingSession.value = false
@@ -206,6 +244,8 @@ export const useChatStore = defineStore('chat', () => {
 
   async function bootstrap() {
     isBootstrapping.value = true
+    // 启动顺序是模型 -> 会话 -> 消息，避免后续会话默认模型无法映射到下拉选项。
+    await loadModels()
     await loadSessions()
 
     if (currentSessionId.value) {
@@ -242,6 +282,7 @@ export const useChatStore = defineStore('chat', () => {
     const fallbackAssistantId = userMessageId + 1
     let assistantInserted = false
 
+    // 先乐观插入用户消息，保证按下发送后页面立即反馈，不等待后端 SSE 首包。
     messages.value = [
       ...messages.value,
       {
@@ -259,13 +300,16 @@ export const useChatStore = defineStore('chat', () => {
       content: trimmed,
       modeCode: currentMode.value,
       modelId:
-        findChatModelByCode(currentModel.value)?.id ?? activeSession.value?.defaultModelId ?? DEFAULT_CHAT_MODEL.id,
+        findChatModelByCode(availableModels.value, currentModel.value)?.id ??
+        activeSession.value?.defaultModelId ??
+        DEFAULT_CHAT_MODEL.id,
     }
 
     try {
       await http.stream('/chat/message/send', payload, (event, rawPayload) => {
         switch (event) {
           case 'message_start': {
+            // 后端创建 assistant 占位后返回真实 messageId，后续 delta/end 都靠它定位消息。
             const startEvent = JSON.parse(rawPayload) as ChatStreamStartEvent
             assistantInserted = true
             messages.value = [
@@ -283,6 +327,7 @@ export const useChatStore = defineStore('chat', () => {
             break
           }
           case 'message_delta': {
+            // 每个 delta 只追加文本，不立即刷新会话列表，减少流式过程中的额外请求。
             const deltaEvent = JSON.parse(rawPayload) as ChatStreamDeltaEvent
             messages.value = messages.value.map((message) =>
               message.id === deltaEvent.messageId
@@ -329,8 +374,9 @@ export const useChatStore = defineStore('chat', () => {
       await loadSessions()
       return true
     } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : 'SEND_MESSAGE_FAILED'
+      errorMessage.value = formatErrorMessage(error, '消息发送失败')
       if (!assistantInserted) {
+        // 如果后端连 assistant 占位都没创建，前端补一条失败消息承载重试入口。
         messages.value = [
           ...messages.value,
           {
@@ -394,7 +440,7 @@ export const useChatStore = defineStore('chat', () => {
       }
       return true
     } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : 'UPDATE_SESSION_TITLE_FAILED'
+      errorMessage.value = formatErrorMessage(error, '更新会话标题失败')
       return false
     } finally {
       isUpdatingSessionTitle.value = false
@@ -431,13 +477,13 @@ export const useChatStore = defineStore('chat', () => {
       } else {
         messages.value = []
         currentSessionTitle.value = EMPTY_SESSION_TITLE
-        currentModel.value = DEFAULT_CHAT_MODEL.code
+        currentModel.value = firstAvailableModel(availableModels.value).code
         currentMode.value = 'quick'
       }
 
       return true
     } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : 'DELETE_SESSION_FAILED'
+      errorMessage.value = formatErrorMessage(error, '删除会话失败')
       return false
     } finally {
       isDeletingSession.value = false
@@ -461,10 +507,12 @@ export const useChatStore = defineStore('chat', () => {
     isCreatingSession,
     isDeletingSession,
     isMessagesLoading,
+    isModelsLoading,
     isResponding,
     isSessionsLoading,
     isUpdatingSessionTitle,
     loadMessages,
+    loadModels,
     loadSessions,
     messages,
     retryMessage,

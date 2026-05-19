@@ -10,7 +10,7 @@ public class DeepSeekProperties {
     private boolean enabled = true;
     private String baseUrl = "https://api.deepseek.com";
     private String apiKey;
-    private String defaultModel = "deepseek-chat";
+    private String defaultModel = "deepseek-v4-flash";
 
     public boolean isEnabled() {
         return enabled;

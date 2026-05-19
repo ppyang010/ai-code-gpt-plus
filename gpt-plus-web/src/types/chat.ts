@@ -11,6 +11,20 @@ export interface PageResponse<T> {
   pageSize: number
 }
 
+export interface ChatModelOption {
+  id: number
+  code: string
+  label: string
+  modelType?: string | null
+  supportStream?: boolean
+  supportThinking?: boolean
+  supportJsonOutput?: boolean
+  supportVision?: boolean
+  supportFile?: boolean
+  contextWindow?: number | null
+  maxOutputTokens?: number | null
+}
+
 export interface ChatSessionListItem {
   sessionId: number
   title: string

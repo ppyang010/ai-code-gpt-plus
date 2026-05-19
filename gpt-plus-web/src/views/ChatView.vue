@@ -5,7 +5,6 @@ import MarkdownIt from 'markdown-it'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import { CHAT_MODEL_OPTIONS } from '@/config/chat-models'
 import type { ChatMessage } from '@/stores/chat'
 import { useChatStore } from '@/stores/chat'
 
@@ -37,10 +36,12 @@ const modeOptions = [
   { label: 'Quick Mode', value: 'quick' },
   { label: 'Expert Mode', value: 'expert' },
 ]
-const modelOptions = CHAT_MODEL_OPTIONS.map((option) => ({
-  label: option.label,
-  value: option.code,
-}))
+const modelOptions = computed(() =>
+  chatStore.availableModels.map((option) => ({
+    label: option.label,
+    value: option.code,
+  })),
+)
 const skeletonRows = [
   [
     { width: '42px', height: '42px', type: 'circle' },
@@ -55,11 +56,13 @@ const skeletonRows = [
     { width: '58%', height: '72px' },
   ],
 ]
-const actionBarOptions = ['copy', 'replay', 'good', 'bad'] as const
+const assistantActionBarOptions = ['copy', 'replay', 'good', 'bad'] as const
+const userActionBarOptions = ['copy'] as const
 const markdown = new MarkdownIt({
   breaks: true,
   linkify: true,
   highlight(code: string, language: string) {
+    // markdown-it 的 highlight 钩子里注入代码块工具栏，便于对单个代码块做复制。
     const normalizedLanguage = language && hljs.getLanguage(language) ? language : 'plaintext'
     const highlightedCode = hljs.highlight(code, {
       language: normalizedLanguage,
@@ -139,6 +142,7 @@ watch(
     })
 
     if (previousIsMessagesLoading && !isMessagesLoading && currentSessionId) {
+      // 切换会话首次加载完成后直接定位到底部，避免长历史停留在旧滚动位置。
       scrollMessagePanelToBottom('auto')
       hasScrolledForCurrentSession.value = true
     }
@@ -170,6 +174,7 @@ watch(
         !hasScrolledForCurrentSession.value || lastMessage.role === 'user' || lastMessage.status === 'streaming'
 
       if (shouldForceScroll || isNearMessageBottom.value) {
+        // 用户主动滚到上方看历史时不强制置底；只有接近底部或正在流式输出才自动跟随。
         scrollMessagePanelToBottom(lastMessage.status === 'streaming' ? 'auto' : 'smooth')
         hasScrolledForCurrentSession.value = true
       }
@@ -183,10 +188,9 @@ async function handleSendClick(value?: string) {
     return
   }
 
-  const success = await chatStore.sendMessage(content)
-  if (success) {
-    draftMessage.value = ''
-  }
+  draftMessage.value = ''
+  // 输入框立即清空，发送失败时由消息区失败态和 retryContent 承接重试。
+  await chatStore.sendMessage(content)
 }
 
 async function handleRetryClick(content?: string) {
@@ -265,6 +269,7 @@ function bindMessagePanelEvents() {
 
   unbindMessagePanelEvents()
   messageScrollContainer = nextScrollContainer
+  // TDesign Chat 内部滚动容器会随渲染切换，因此这里每次 nextTick 后重新绑定真实 DOM。
   messageScrollContainer.addEventListener('scroll', handleMessageScroll, { passive: true })
   messageScrollContainer.addEventListener('click', handleMessagePanelClick)
   updateMessageBottomState()
@@ -311,6 +316,7 @@ async function handleMessagePanelClick(event: Event) {
     return
   }
 
+  // 代码块是 markdown 渲染出来的 HTML，使用事件委托比给每个块挂 Vue 事件更稳定。
   const codeElement = copyButton.closest('.chat-code-block')?.querySelector('code')
   const codeText = codeElement?.textContent || ''
   if (!codeText) {
@@ -568,9 +574,9 @@ async function confirmDeleteDialog() {
 
           <template #actionbar="{ item }">
             <t-chat-actionbar
-              v-if="item.sourceMessage.role === 'assistant'"
+              v-if="item.sourceMessage.role === 'assistant' || item.sourceMessage.role === 'user'"
               :content="getActionContent(item)"
-              :action-bar="actionBarOptions"
+              :action-bar="item.sourceMessage.role === 'assistant' ? assistantActionBarOptions : userActionBarOptions"
               :comment="item.comment"
               :disabled="item.sourceMessage.status === 'streaming'"
               @actions="handleMessageAction($event, item)"

@@ -30,6 +30,7 @@ public class DefaultChatPromptResolver implements ChatPromptResolver {
     @Override
     public String resolveSystemPrompt(String modeCode, String sessionPrompt, String requestPrompt) {
         StringBuilder builder = new StringBuilder();
+        // 提示词按“模式默认 + 会话补充 + 本次请求补充”追加，保留模式差异也允许局部增强。
         append(builder, modePromptTemplates.get(ChatModeEnum.fromCodeOrDefault(modeCode).getCode()));
         append(builder, sessionPrompt);
         append(builder, requestPrompt);

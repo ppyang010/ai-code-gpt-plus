@@ -1,6 +1,6 @@
 # 后端本地环境与启动说明
 
-最后更新：2026-05-08
+最后更新：2026-05-15
 
 ## 项目目录
 
@@ -91,7 +91,7 @@ mvn -version
 ```bash
 export DEEPSEEK_BASE_URL=https://api.deepseek.com
 export DEEPSEEK_API_KEY=your_api_key
-export DEEPSEEK_DEFAULT_MODEL=deepseek-chat
+export DEEPSEEK_DEFAULT_MODEL=deepseek-v4-flash
 ```
 
 对应配置位置：
@@ -108,6 +108,22 @@ export DEEPSEEK_DEFAULT_MODEL=deepseek-chat
 
 - 可以直接验证真实 DeepSeek 流式响应
 - 发送消息成功后会同步落库 `chat_message`、`api_call_log`、`user_token_usage`
+
+## 当前本地模型初始化约定
+
+当前本地数据库保留两个启用模型：
+
+- `id = 1`：`deepseek-v4-flash`
+- `id = 2`：`deepseek-v4-pro`
+
+同时 `model_config` 已显式增加以下能力字段：
+
+- `support_thinking`
+- `support_json_output`
+
+当前默认模型固定为：
+
+- `deepseek-v4-flash`
 
 ## 本地密钥保存方式
 

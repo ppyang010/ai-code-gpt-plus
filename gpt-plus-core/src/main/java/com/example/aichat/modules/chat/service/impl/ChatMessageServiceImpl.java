@@ -1,5 +1,6 @@
 package com.example.aichat.modules.chat.service.impl;
 
+import com.example.aichat.common.enums.ErrorCode;
 import com.example.aichat.common.enums.ChatModeEnum;
 import com.example.aichat.common.enums.ChatRoleEnum;
 import com.example.aichat.common.enums.MessageStatusEnum;
@@ -11,6 +12,7 @@ import com.example.aichat.infrastructure.ai.ChatModelMessage;
 import com.example.aichat.infrastructure.ai.ChatModelRequest;
 import com.example.aichat.infrastructure.ai.ChatModelResponse;
 import com.example.aichat.infrastructure.ai.ChatModelStreamChunk;
+import com.example.aichat.infrastructure.ai.deepseek.DeepSeekProperties;
 import com.example.aichat.modules.billing.entity.UserTokenUsageDO;
 import com.example.aichat.modules.billing.mapper.UserTokenUsageMapper;
 import com.example.aichat.modules.chat.dto.ChatMessageRegenerateRequest;
@@ -63,6 +65,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private final ApiCallLogMapper apiCallLogMapper;
     private final UserTokenUsageMapper userTokenUsageMapper;
     private final ObjectMapper objectMapper;
+    private final DeepSeekProperties deepSeekProperties;
 
     public ChatMessageServiceImpl(
             ChatPromptResolver chatPromptResolver,
@@ -72,7 +75,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             ChatModelClientRegistry chatModelClientRegistry,
             ApiCallLogMapper apiCallLogMapper,
             UserTokenUsageMapper userTokenUsageMapper,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            DeepSeekProperties deepSeekProperties
     ) {
         this.chatPromptResolver = chatPromptResolver;
         this.chatSessionMapper = chatSessionMapper;
@@ -82,6 +86,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         this.apiCallLogMapper = apiCallLogMapper;
         this.userTokenUsageMapper = userTokenUsageMapper;
         this.objectMapper = objectMapper;
+        this.deepSeekProperties = deepSeekProperties;
     }
 
     @Override
@@ -106,15 +111,16 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     @Transactional(rollbackFor = Exception.class)
     public void sendMessage(Long userId, ChatMessageSendRequest request, SseEmitter emitter) {
         if (request.getSessionId() == null) {
-            throw new BizException(400, "CHAT_SESSION_NOT_FOUND");
+            throw new BizException(ErrorCode.CHAT_SESSION_NOT_FOUND);
         }
         if (!StringUtils.hasText(request.getContent())) {
-            throw new BizException(400, "CHAT_MESSAGE_EMPTY");
+            throw new BizException(ErrorCode.CHAT_MESSAGE_EMPTY);
         }
 
         ChatSessionDO session = getActiveSession(userId, request.getSessionId());
         ModelConfigDO model = resolveModel(session, request.getModelId());
 
+        // 本次请求的系统提示词由模式、会话和请求三层合并，保证模式切换能影响同一会话内的回答策略。
         String finalPrompt = chatPromptResolver.resolveSystemPrompt(
                 request.getModeCode() != null ? request.getModeCode() : session.getModeCode(),
                 session.getSystemPrompt(),
@@ -128,7 +134,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         chatMessageMapper.insert(userMessage);
         chatSessionMapper.updateLastMessageAt(session.getId(), LocalDateTime.now());
 
-        streamMockAnswer(
+        streamAssistantAnswer(
                 userId,
                 session,
                 model,
@@ -140,10 +146,10 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
     @Override
     public void regenerateMessage(Long userId, ChatMessageRegenerateRequest request, SseEmitter emitter) {
-        throw new BizException(501, "CHAT_REGENERATE_NOT_IMPLEMENTED");
+        throw new BizException(ErrorCode.CHAT_REGENERATE_NOT_IMPLEMENTED);
     }
 
-    private void streamMockAnswer(
+    private void streamAssistantAnswer(
             Long userId,
             ChatSessionDO session,
             ModelConfigDO model,
@@ -151,6 +157,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             int assistantSeqNo,
             SseEmitter emitter
     ) {
+        // 模型调用放到异步线程中执行，HTTP 请求线程可以尽快返回 SseEmitter 并持续推送增量事件。
         CompletableFuture.runAsync(() -> {
             ChatMessageDO assistantMessage = buildAssistantPlaceholder(userId, session.getId(), model, assistantSeqNo);
             try {
@@ -165,6 +172,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                         chunk -> emitChunk(emitter, assistantMessage.getId(), chunk)
                 );
 
+                // 流式结束后再一次性回写 assistant 正文和 token，避免每个增量 chunk 都打数据库。
                 assistantMessage.setContent(modelResponse.getContent());
                 assistantMessage.setFinishReason(modelResponse.getFinishReason());
                 assistantMessage.setStatus(MessageStatusEnum.NORMAL.getCode());
@@ -195,6 +203,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 emitter.complete();
             } catch (Exception exception) {
                 try {
+                    // 失败也要落一条 assistant 失败记录，前端刷新历史时可以看到上次请求失败。
                     assistantMessage.setStatus(MessageStatusEnum.FAILED.getCode());
                     assistantMessage.setFinishReason("error");
                     if (assistantMessage.getId() != null) {
@@ -227,21 +236,27 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private ChatSessionDO getActiveSession(Long userId, Long sessionId) {
         ChatSessionDO session = chatSessionMapper.selectActiveById(sessionId, userId);
         if (session == null || !Objects.equals(session.getStatus(), SESSION_STATUS_ACTIVE)) {
-            throw new BizException(404, "CHAT_SESSION_NOT_FOUND");
+            throw new BizException(ErrorCode.CHAT_SESSION_NOT_FOUND);
         }
         return session;
     }
 
     private ModelConfigDO resolveModel(ChatSessionDO session, Long requestModelId) {
         Long modelId = requestModelId != null ? requestModelId : session.getDefaultModelId();
-        if (modelId == null) {
-            return null;
+        if (modelId != null) {
+            ModelConfigDO model = modelConfigMapper.selectEnabledById(modelId);
+            if (model == null) {
+                throw new BizException(ErrorCode.CHAT_MODEL_NOT_FOUND);
+            }
+            return model;
         }
-        ModelConfigDO model = modelConfigMapper.selectEnabledById(modelId);
-        if (model == null) {
-            throw new BizException(404, "CHAT_MODEL_NOT_FOUND");
+
+        // 老会话可能没有 default_model_id，因此继续用配置里的默认模型兜底。
+        ModelConfigDO defaultModel = modelConfigMapper.selectByModelCode(deepSeekProperties.getDefaultModel());
+        if (defaultModel == null || !Objects.equals(defaultModel.getStatus(), 1)) {
+            throw new BizException(ErrorCode.CHAT_DEFAULT_MODEL_NOT_CONFIGURED);
         }
-        return model;
+        return defaultModel;
     }
 
     private int nextSeqNo(Long sessionId) {
@@ -300,6 +315,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     }
 
     private List<ChatModelMessage> loadContextMessages(Long sessionId) {
+        // 第一版只取最近 10 条上下文，控制 token 成本；后续可接入模型 contextWindow 做动态裁剪。
         return chatMessageMapper.selectLatestMessages(sessionId, 10).stream()
                 .sorted((left, right) -> Integer.compare(left.getSeqNo(), right.getSeqNo()))
                 .map(message -> new ChatModelMessage(message.getRole(), message.getContent()))
@@ -316,7 +332,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         try {
             emitter.send(SseEmitter.event().name("message_delta").data(deltaEvent));
         } catch (Exception exception) {
-            throw new BizException(500, "CHAT_STREAM_ERROR");
+            throw new BizException(ErrorCode.CHAT_STREAM_ERROR);
         }
     }
 
@@ -325,6 +341,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     }
 
     private boolean shouldPersistProviderUsage(ModelConfigDO model, ChatModelClient chatModelClient) {
+        // mock 不产生真实供应商消耗，避免把调试响应记入调用日志和 token 统计。
         return model != null
                 && model.getId() != null
                 && model.getProviderId() != null
@@ -346,6 +363,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             return;
         }
         try {
+            // 统计日志是旁路能力，落库失败只写日志，不影响用户已经收到的模型响应。
             ApiCallLogDO apiCallLog = buildSuccessApiCallLog(
                     userId,
                     session,

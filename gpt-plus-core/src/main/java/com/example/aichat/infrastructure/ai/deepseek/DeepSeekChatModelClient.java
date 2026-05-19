@@ -1,5 +1,6 @@
 package com.example.aichat.infrastructure.ai.deepseek;
 
+import com.example.aichat.common.enums.ErrorCode;
 import com.example.aichat.common.exception.BizException;
 import com.example.aichat.infrastructure.ai.ChatModelClient;
 import com.example.aichat.infrastructure.ai.ChatModelClientException;
@@ -58,9 +59,10 @@ public class DeepSeekChatModelClient implements ChatModelClient {
     @SuppressWarnings("unchecked")
     public ChatModelResponse streamChat(ChatModelRequest request, Consumer<ChatModelStreamChunk> chunkConsumer) {
         if (!StringUtils.hasText(properties.getApiKey())) {
-            throw new BizException(503, "DEEPSEEK_API_KEY_NOT_CONFIGURED");
+            throw new BizException(ErrorCode.DEEPSEEK_API_KEY_NOT_CONFIGURED);
         }
 
+        // DeepSeek 的 token usage 只会在流式尾包返回，因此请求必须打开 include_usage。
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("model", resolveModel(request));
         payload.put("stream", Boolean.TRUE);
@@ -113,6 +115,7 @@ public class DeepSeekChatModelClient implements ChatModelClient {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
+                // DeepSeek 按 SSE data 行返回增量内容；非 data 行只作为协议噪声跳过。
                 if (!StringUtils.hasText(line) || !line.startsWith("data:")) {
                     continue;
                 }
@@ -130,6 +133,7 @@ public class DeepSeekChatModelClient implements ChatModelClient {
 
                 Map<String, Object> usage = castMap(chunk.get("usage"));
                 if (usage != null) {
+                    // usage 通常出现在最后一个 chunk，覆盖前面的 0 值即可。
                     promptTokens = readInt(usage, "prompt_tokens");
                     completionTokens = readInt(usage, "completion_tokens");
                     totalTokens = readInt(usage, "total_tokens");
@@ -193,6 +197,7 @@ public class DeepSeekChatModelClient implements ChatModelClient {
         if (StringUtils.hasText(request.getSystemPrompt())) {
             messages.add(newMessage("system", request.getSystemPrompt()));
         }
+        // 历史上下文在 service 层已经按 seqNo 排序，这里只负责过滤空消息并拼装供应商格式。
         for (ChatModelMessage modelMessage : request.getMessages()) {
             if (modelMessage != null && StringUtils.hasText(modelMessage.getRole()) && StringUtils.hasText(modelMessage.getContent())) {
                 messages.add(newMessage(modelMessage.getRole(), modelMessage.getContent()));

@@ -2,4 +2,4 @@ ai:
   deepseek:
     base-url: https://api.deepseek.com
     api-key: your_api_key
-    default-model: deepseek-chat
+    default-model: deepseek-v4-flash

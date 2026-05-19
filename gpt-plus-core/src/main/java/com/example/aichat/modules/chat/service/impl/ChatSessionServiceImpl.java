@@ -3,7 +3,9 @@ package com.example.aichat.modules.chat.service.impl;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.aichat.common.dto.PageResponse;
 import com.example.aichat.common.enums.ChatModeEnum;
+import com.example.aichat.common.enums.ErrorCode;
 import com.example.aichat.common.exception.BizException;
+import com.example.aichat.infrastructure.ai.deepseek.DeepSeekProperties;
 import com.example.aichat.modules.chat.dto.ChatSessionCreateRequest;
 import com.example.aichat.modules.chat.dto.ChatSessionUpdateTitleRequest;
 import com.example.aichat.modules.chat.entity.ChatMessageDO;
@@ -35,15 +37,18 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     private final ChatSessionMapper chatSessionMapper;
     private final ChatMessageMapper chatMessageMapper;
     private final ModelConfigMapper modelConfigMapper;
+    private final DeepSeekProperties deepSeekProperties;
 
     public ChatSessionServiceImpl(
             ChatSessionMapper chatSessionMapper,
             ChatMessageMapper chatMessageMapper,
-            ModelConfigMapper modelConfigMapper
+            ModelConfigMapper modelConfigMapper,
+            DeepSeekProperties deepSeekProperties
     ) {
         this.chatSessionMapper = chatSessionMapper;
         this.chatMessageMapper = chatMessageMapper;
         this.modelConfigMapper = modelConfigMapper;
+        this.deepSeekProperties = deepSeekProperties;
     }
 
     @Override
@@ -59,6 +64,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .map(ChatSessionDO::getDefaultModelId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
+        // 列表页批量加载模型信息，避免每个会话单独查一次模型表。
         Map<Long, ModelConfigDO> modelMap = loadModelMap(modelIds);
 
         PageResponse<ChatSessionListItemVO> response = new PageResponse<>();
@@ -75,15 +81,13 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         LocalDateTime now = LocalDateTime.now();
         String modeCode = ChatModeEnum.fromCodeOrDefault(request.getModeCode()).getCode();
 
-        if (request.getDefaultModelId() != null && modelConfigMapper.selectEnabledById(request.getDefaultModelId()) == null) {
-            throw new BizException(400, "CHAT_MODEL_NOT_FOUND");
-        }
+        Long defaultModelId = resolveDefaultModelId(request.getDefaultModelId());
 
         ChatSessionDO entity = new ChatSessionDO();
         entity.setUserId(userId);
         entity.setTitle(StringUtils.hasText(request.getTitle()) ? request.getTitle().trim() : "New Chat");
         entity.setModeCode(modeCode);
-        entity.setDefaultModelId(request.getDefaultModelId());
+        entity.setDefaultModelId(defaultModelId);
         entity.setSystemPrompt(request.getSystemPrompt());
         entity.setLastMessageAt(now);
         entity.setStatus(SESSION_STATUS_ACTIVE);
@@ -93,7 +97,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         response.setSessionId(entity.getId());
         response.setTitle(entity.getTitle());
         response.setModeCode(entity.getModeCode());
-        response.setDefaultModelId(entity.getDefaultModelId());
+        response.setDefaultModelId(defaultModelId);
         response.setCreatedAt(entity.getCreatedAt() != null ? entity.getCreatedAt() : now);
         return response;
     }
@@ -102,10 +106,10 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     @Transactional(rollbackFor = Exception.class)
     public void updateTitle(Long userId, ChatSessionUpdateTitleRequest request) {
         if (request.getSessionId() == null) {
-            throw new BizException(400, "CHAT_SESSION_NOT_FOUND");
+            throw new BizException(ErrorCode.CHAT_SESSION_NOT_FOUND);
         }
         if (!StringUtils.hasText(request.getTitle())) {
-            throw new BizException(400, "CHAT_SESSION_TITLE_EMPTY");
+            throw new BizException(ErrorCode.CHAT_SESSION_TITLE_EMPTY);
         }
 
         ChatSessionDO session = getActiveSession(userId, request.getSessionId());
@@ -136,9 +140,25 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     private ChatSessionDO getActiveSession(Long userId, Long sessionId) {
         ChatSessionDO session = chatSessionMapper.selectActiveById(sessionId, userId);
         if (session == null) {
-            throw new BizException(404, "CHAT_SESSION_NOT_FOUND");
+            throw new BizException(ErrorCode.CHAT_SESSION_NOT_FOUND);
         }
         return session;
+    }
+
+    private Long resolveDefaultModelId(Long requestModelId) {
+        if (requestModelId != null) {
+            if (modelConfigMapper.selectEnabledById(requestModelId) == null) {
+                throw new BizException(ErrorCode.CHAT_MODEL_NOT_FOUND);
+            }
+            return requestModelId;
+        }
+
+        // 前端可以不传模型，后端用 DeepSeek 默认模型保证创建会话仍然可用。
+        ModelConfigDO defaultModel = modelConfigMapper.selectByModelCode(deepSeekProperties.getDefaultModel());
+        if (defaultModel == null || !Objects.equals(defaultModel.getStatus(), 1)) {
+            throw new BizException(ErrorCode.CHAT_DEFAULT_MODEL_NOT_CONFIGURED);
+        }
+        return defaultModel.getId();
     }
 
     private Map<Long, ModelConfigDO> loadModelMap(Set<Long> modelIds) {
@@ -166,6 +186,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
             item.setDefaultModelName(model.getModelName());
         }
 
+        // 左侧列表只展示最近一条消息摘要，完整消息仍由 message/list 单独加载。
         List<ChatMessageDO> latestMessages = chatMessageMapper.selectLatestMessages(session.getId(), 1);
         if (!latestMessages.isEmpty()) {
             String content = latestMessages.get(0).getContent();

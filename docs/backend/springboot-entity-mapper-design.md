@@ -302,6 +302,12 @@ public class ModelConfigDO extends BaseDO {
     @TableField("support_stream")
     private Integer supportStream;
 
+    @TableField("support_thinking")
+    private Integer supportThinking;
+
+    @TableField("support_json_output")
+    private Integer supportJsonOutput;
+
     @TableField("support_vision")
     private Integer supportVision;
 

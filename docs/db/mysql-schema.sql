@@ -39,10 +39,12 @@ CREATE TABLE `model_provider` (
 CREATE TABLE `model_config` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `provider_id` BIGINT UNSIGNED NOT NULL COMMENT '供应商ID',
-  `model_code` VARCHAR(128) NOT NULL COMMENT '模型编码，如 gpt-4o/deepseek-chat',
+  `model_code` VARCHAR(128) NOT NULL COMMENT '模型编码，如 gpt-4o/deepseek-v4-flash',
   `model_name` VARCHAR(128) NOT NULL COMMENT '模型显示名',
   `model_type` VARCHAR(32) NOT NULL DEFAULT 'chat' COMMENT '模型类型: chat/embedding/rerank',
   `support_stream` TINYINT NOT NULL DEFAULT 1 COMMENT '是否支持流式',
+  `support_thinking` TINYINT NOT NULL DEFAULT 0 COMMENT '是否支持思考模式',
+  `support_json_output` TINYINT NOT NULL DEFAULT 0 COMMENT '是否支持JSON Output',
   `support_vision` TINYINT NOT NULL DEFAULT 0 COMMENT '是否支持图片',
   `support_file` TINYINT NOT NULL DEFAULT 0 COMMENT '是否支持文件',
   `context_window` INT DEFAULT NULL COMMENT '上下文窗口大小',

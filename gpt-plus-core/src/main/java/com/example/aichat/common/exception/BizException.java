@@ -1,8 +1,20 @@
 package com.example.aichat.common.exception;
 
+import com.example.aichat.common.enums.ErrorCode;
+
 public class BizException extends RuntimeException {
 
     private final int code;
+
+    public BizException(ErrorCode errorCode) {
+        super(errorCode.getMessage());
+        this.code = errorCode.getCode();
+    }
+
+    public BizException(ErrorCode errorCode, String message) {
+        super(message);
+        this.code = errorCode.getCode();
+    }
 
     public BizException(int code, String message) {
         super(message);

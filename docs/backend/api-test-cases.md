@@ -1,6 +1,6 @@
 # 后端接口测试用例
 
-最后更新：2026-05-09
+最后更新：2026-05-19
 
 ## 说明
 
@@ -29,11 +29,38 @@ jenv exec mvn spring-boot:run -Dspring-boot.run.profiles=local
 - 数据源已配置到 [application.yml](/Users/ccy/CcyProjects/ai-code-gpt-plus/gpt-plus-core/src/main/resources/application.yml)
 - 数据库初始化 SQL 已执行
 - 当前临时用户身份通过请求头 `X-User-Id` 传入
-- 如果要验证真实 DeepSeek 调用，需保证 `model_provider` / `model_config` 中已有启用的 `deepseek` / `deepseek-chat` 配置
+- 如果要验证真实 DeepSeek 调用，需保证 `model_provider` / `model_config` 中已有启用的 `deepseek` 供应商和以下模型配置：
+  - `id = 1` / `deepseek-v4-flash`
+  - `id = 2` / `deepseek-v4-pro`
 
 ## 测试用例
 
-### 1. 服务可访问性检查
+### 1. 健康检查
+
+#### 请求
+
+```bash
+curl -s "http://127.0.0.1:8080/api/health"
+```
+
+#### 预期
+
+- 返回 `code = 0`
+- 返回服务状态 `UP`
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "status": "UP",
+    "service": "gpt-plus-core",
+    "checkedAt": "2026-05-19T15:00:00"
+  }
+}
+```
+
+### 2. 根路径非业务检查
 
 #### 请求
 
@@ -43,12 +70,11 @@ curl -i -s "http://127.0.0.1:8080/"
 
 #### 预期
 
-- 返回 HTTP `200`
 - 返回 JSON 结构
 - 当前因为没有首页资源，响应内容可能是：
 
 ```json
-{"code":500,"data":null,"message":"No static resource  for request '/'."}
+{"code":500,"data":null,"message":"INTERNAL_ERROR"}
 ```
 
 说明：
@@ -56,7 +82,48 @@ curl -i -s "http://127.0.0.1:8080/"
 - 这不表示服务启动失败
 - 只表示根路径 `/` 没有配置页面或静态资源
 
-### 2. 查询会话列表
+### 3. 查询模型列表
+
+#### 请求
+
+```bash
+curl -s "http://127.0.0.1:8080/api/model/list" \
+  -H "X-User-Id: 1"
+```
+
+#### 预期
+
+- 返回 `code = 0`
+- 返回启用模型列表
+- 本地初始化数据中应包含：
+  - `deepseek-v4-flash`
+  - `deepseek-v4-pro`
+
+响应示例：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": [
+    {
+      "id": 1,
+      "code": "deepseek-v4-flash",
+      "label": "DeepSeek V4 Flash",
+      "modelType": "chat",
+      "supportStream": true,
+      "supportThinking": false,
+      "supportJsonOutput": true,
+      "supportVision": false,
+      "supportFile": false,
+      "contextWindow": 64000,
+      "maxOutputTokens": 8000
+    }
+  ]
+}
+```
+
+### 4. 查询会话列表
 
 #### 请求
 
@@ -84,7 +151,7 @@ curl -s "http://127.0.0.1:8080/api/chat/session/list?pageNo=1&pageSize=10" \
 }
 ```
 
-### 3. 创建会话
+### 5. 创建会话
 
 #### 请求
 
@@ -94,7 +161,8 @@ curl -s -X POST "http://127.0.0.1:8080/api/chat/session/create" \
   -H "X-User-Id: 1" \
   -d '{
     "title": "测试会话",
-    "modeCode": "quick"
+    "modeCode": "quick",
+    "defaultModelId": 1
   }'
 ```
 
@@ -112,7 +180,7 @@ curl -s -X POST "http://127.0.0.1:8080/api/chat/session/create" \
     "sessionId": 1,
     "title": "测试会话",
     "modeCode": "quick",
-    "defaultModelId": null,
+    "defaultModelId": 1,
     "createdAt": "2026-05-05T15:00:00"
   }
 }
@@ -122,9 +190,10 @@ curl -s -X POST "http://127.0.0.1:8080/api/chat/session/create" \
 
 - `chat_session` 表中新增一条记录
 - `user_id = 1`
+- `default_model_id = 1`
 - `status = 1`
 
-### 4. 查询消息列表
+### 6. 查询消息列表
 
 #### 请求
 
@@ -139,7 +208,7 @@ curl -s "http://127.0.0.1:8080/api/chat/message/list?sessionId=1" \
 - 返回 `sessionId`、`title`、`modeCode`
 - 初始情况下 `messageList` 可能为空
 
-### 5. 发送消息
+### 7. 发送消息
 
 #### 请求
 
@@ -181,7 +250,7 @@ curl -N -X POST "http://127.0.0.1:8080/api/chat/message/send" \
 - `api_call_log.success_flag = 1`
 - `user_token_usage.total_tokens` 与 `chat_message.total_tokens` 一致
 
-### 6. 修改会话标题
+### 8. 修改会话标题
 
 #### 请求
 
@@ -209,7 +278,7 @@ curl -s -X POST "http://127.0.0.1:8080/api/chat/session/update-title" \
 
 - 数据库中 `chat_session.title` 被更新
 
-### 7. 删除会话
+### 9. 删除会话
 
 #### 请求
 
@@ -237,6 +306,14 @@ curl -s -X POST "http://127.0.0.1:8080/api/chat/session/delete" \
 - 数据库中 `chat_session.status` 被更新为逻辑删除状态
 
 ## 数据库辅助检查
+
+### 查询模型配置
+
+```sql
+SELECT id, provider_id, model_code, model_name, support_stream, support_thinking, support_json_output, status
+FROM model_config
+ORDER BY id;
+```
 
 ### 查询会话
 

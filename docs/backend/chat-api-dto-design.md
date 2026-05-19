@@ -180,12 +180,64 @@ yyyy-MM-dd HH:mm:ss
 5. `GET /api/chat/message/list` 获取会话消息列表
 6. `POST /api/chat/message/send` 发送消息并流式返回
 7. `POST /api/chat/message/regenerate` 重新生成回答
+8. `GET /api/model/list` 获取启用模型列表
+9. `GET /api/health` 健康检查
 
 如果你想让“发消息”也走普通接口，后面可以再加：
 
 - `POST /api/chat/message/send-sync`
 
 但第一版更建议主用 SSE。
+
+---
+
+## 模型列表接口
+
+### 接口
+
+```http
+GET /api/model/list
+```
+
+### 响应 DTO
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": [
+    {
+      "id": 2001,
+      "code": "deepseek-v4-flash",
+      "label": "DeepSeek V4 Flash",
+      "modelType": "chat",
+      "supportStream": true,
+      "supportThinking": false,
+      "supportJsonOutput": true,
+      "supportVision": false,
+      "supportFile": false,
+      "contextWindow": 64000,
+      "maxOutputTokens": 8000
+    }
+  ]
+}
+```
+
+### 字段说明
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | Long | 模型配置 ID，聊天请求中的 `modelId` 使用该值 |
+| code | String | 模型编码，如 `deepseek-v4-flash` |
+| label | String | 前端展示名 |
+| modelType | String | 模型类型，如 `chat` |
+| supportStream | Boolean | 是否支持流式输出 |
+| supportThinking | Boolean | 是否支持思考模式 |
+| supportJsonOutput | Boolean | 是否支持 JSON Output |
+| supportVision | Boolean | 是否支持图片 |
+| supportFile | Boolean | 是否支持文件 |
+| contextWindow | Integer | 上下文窗口 |
+| maxOutputTokens | Integer | 最大输出 token 数 |
 
 ---
 
@@ -217,8 +269,8 @@ GET /api/chat/session/list?pageNo=1&pageSize=20
         "title": "帮我写一份 Vue3 聊天页",
         "modeCode": "quick",
         "defaultModelId": 2001,
-        "defaultModelCode": "deepseek-chat",
-        "defaultModelName": "DeepSeek Chat",
+        "defaultModelCode": "deepseek-v4-flash",
+        "defaultModelName": "DeepSeek V4 Flash",
         "lastMessagePreview": "可以，我先帮你拆分页面结构...",
         "lastMessageAt": "2026-04-21 15:00:00",
         "createdAt": "2026-04-21 14:30:00"
@@ -420,8 +472,8 @@ GET /api/chat/message/list?sessionId=1001
         "contentFormat": "markdown",
         "seqNo": 2,
         "modelId": 2001,
-        "modelCode": "deepseek-chat",
-        "modelName": "DeepSeek Chat",
+        "modelCode": "deepseek-v4-flash",
+        "modelName": "DeepSeek V4 Flash",
         "finishReason": "stop",
         "status": 1,
         "promptTokens": 500,
@@ -554,7 +606,7 @@ Connection: keep-alive
 
 ```text
 event: message_start
-data: {"sessionId":1001,"messageId":9003,"role":"assistant","modelId":2001,"modelCode":"deepseek-chat","modelName":"DeepSeek Chat"}
+data: {"sessionId":1001,"messageId":9003,"role":"assistant","modelId":2001,"modelCode":"deepseek-v4-flash","modelName":"DeepSeek V4 Flash"}
 ```
 
 ### 2. message_delta
@@ -1067,16 +1119,25 @@ chat:
 
 第一版建议先统一几类错误：
 
+当前普通 JSON 接口响应中，`code` 仍保持数值状态码，`message` 返回中文错误提示，方便前端直接展示。
+
 | 错误码 | 说明 |
 |---|---|
+| `INVALID_PARAM` | 请求参数校验失败 |
+| `REQUEST_BODY_INVALID` | 请求体、查询参数或路径参数格式错误 |
 | `CHAT_SESSION_NOT_FOUND` | 会话不存在 |
 | `CHAT_SESSION_NO_PERMISSION` | 无权访问该会话 |
 | `CHAT_MODEL_NOT_FOUND` | 模型不存在 |
 | `CHAT_MODEL_DISABLED` | 模型已禁用 |
+| `CHAT_DEFAULT_MODEL_NOT_CONFIGURED` | 默认模型未配置或未启用 |
+| `CHAT_MODEL_CLIENT_NOT_FOUND` | 未找到可用模型客户端 |
 | `CHAT_MESSAGE_EMPTY` | 消息内容为空 |
 | `CHAT_STREAM_ERROR` | 流式输出异常 |
+| `CHAT_REGENERATE_NOT_IMPLEMENTED` | 重新生成接口暂未实现 |
+| `DEEPSEEK_API_KEY_NOT_CONFIGURED` | DeepSeek API Key 未配置 |
 | `MODEL_REQUEST_FAILED` | 模型调用失败 |
 | `MODEL_TIMEOUT` | 模型响应超时 |
+| `INTERNAL_ERROR` | 未预期服务端异常 |
 
 ---
 
