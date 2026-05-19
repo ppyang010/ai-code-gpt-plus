@@ -74,6 +74,7 @@
 - 前端任务清单： [docs/frontend/task.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/frontend/task.md)
 - 项目规则： [project-rules.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/rules/project-rules.md)
 - API 测试规则： [api-test-rules.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/rules/api-test-rules.md)
+- 目录结构说明： [project-directory-structure.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/project-directory-structure.md)
 - 数据库文档： [mysql-schema.sql](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/db/mysql-schema.sql)
 - 接口与后端设计文档：`docs/backend`
 
