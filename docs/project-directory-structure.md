@@ -203,6 +203,7 @@ docs/
 | `task.md` | 后端详细任务清单。 |
 | `backend-local-setup.md` | 后端本地环境、配置、启动和验证说明。 |
 | `chat-api-dto-design.md` | 聊天接口 DTO/VO 设计说明。 |
+| `chat-response-resume-design.md` | 聊天响应中断后继续技术方案，约定状态流、接口语义和前后端实现顺序。 |
 | `springboot-entity-mapper-design.md` | Spring Boot 实体和 Mapper 设计说明。 |
 | `api-test-cases.md` | 稳定 API 测试用例。 |
 | `api-test-results/` | 每次真实联调或回归的执行结果记录。 |
