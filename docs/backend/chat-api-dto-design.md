@@ -10,7 +10,7 @@
 - SSE 流式返回
 - 基础 DTO / VO 设计
 
-设计目标是让前端 `Vue` 和后端 `Spring Boot` 可以并行开发，并为后续扩展多模型、额度、联网搜索、文件上传预留空间。
+设计目标是让前端 `Vue` 和后端 `Spring Boot` 可以并行开发，并为后续扩展多模型、额度、联网搜索预留空间，同时把图片上传和断点续传纳入本轮需求设计范围。
 
 ## 范围说明
 
@@ -23,14 +23,19 @@
 - 消息持久化
 - SSE 流式输出
 - token 和调用日志记录
+- 图片上传
+- 文件分片上传与断点续传
 
 当前版本不做：
 
 - 额度拦截
 - 充值扣费
-- 文件上传
 - 联网搜索
 - 多端同步冲突处理
+
+补充说明：
+
+- 图片上传和断点续传已经纳入当前需求范围，但当前仓库仍处于文档设计阶段，尚未进入代码实现。
 
 ## 模式设计
 
@@ -182,6 +187,10 @@ yyyy-MM-dd HH:mm:ss
 7. `POST /api/chat/message/regenerate` 重新生成回答
 8. `GET /api/model/list` 获取启用模型列表
 9. `GET /api/health` 健康检查
+10. `POST /api/file/upload/init` 初始化上传任务
+11. `POST /api/file/upload/chunk` 上传文件分片
+12. `POST /api/file/upload/complete` 合并上传分片并生成附件
+13. `GET /api/file/upload/status` 查询上传状态，支持断点续传
 
 如果你想让“发消息”也走普通接口，后面可以再加：
 
@@ -514,6 +523,7 @@ Accept: text/event-stream
   "modelId": 2001,
   "modeCode": "quick",
   "systemPrompt": "请优先给出可以直接落地的 Java 代码结构",
+  "attachmentIds": [3001],
   "enableDeepThinking": false,
   "enableWebSearch": false,
   "regenerateMessageId": null
@@ -529,6 +539,7 @@ Accept: text/event-stream
 | modelId | Long | 否 | 本次指定模型，不传则取会话默认模型 |
 | modeCode | String | 否 | `quick` / `expert`，不传则沿用会话，并据此加载默认提示词模板 |
 | systemPrompt | String | 否 | 本次附加提示词，和模式模板合并使用 |
+| attachmentIds | List<Long> | 否 | 已上传附件 ID 列表，支持图片附件，按用户选择顺序传入 |
 | enableDeepThinking | Boolean | 否 | 预留字段 |
 | enableWebSearch | Boolean | 否 | 预留字段 |
 | regenerateMessageId | Long | 否 | 若是重新生成，传上一条 assistant 消息 ID |
@@ -537,19 +548,150 @@ Accept: text/event-stream
 
 1. 校验 `sessionId` 属于当前用户
 2. 校验模型是否可用
-3. 根据 `modeCode` 解析模式默认提示词模板
-4. 合并模式提示词、会话级提示词、本次请求级提示词
-5. 先落库用户消息
-6. 创建一条 assistant 占位消息，状态可先记为生成中
-7. 调用模型接口并逐段返回
-8. 流结束后更新 assistant 完整内容、token、finishReason
-9. 记录 `api_call_log`
-10. 记录 `user_token_usage`
-11. 更新 `chat_session.lastMessageAt`
+3. 校验 `attachmentIds` 是否都属于当前用户且已完成上传
+4. 根据 `modeCode` 解析模式默认提示词模板
+5. 合并模式提示词、会话级提示词、本次请求级提示词
+6. 先落库用户消息
+7. 创建一条 assistant 占位消息，状态可先记为生成中
+8. 调用模型接口并逐段返回
+9. 流结束后更新 assistant 完整内容、token、finishReason
+10. 记录 `api_call_log`
+11. 记录 `user_token_usage`
+12. 更新 `chat_session.lastMessageAt`
 
 ---
 
-## 7. 重新生成回答
+## 7. 文件上传、图片上传与断点续传
+
+这部分能力用于给聊天消息补充图片或通用附件，并保证大文件或弱网场景可以续传。
+
+### 能力目标
+
+- 支持聊天输入区上传图片
+- 支持后续扩展普通文件上传
+- 支持分片上传
+- 支持上传中断后查询已完成分片并继续上传
+- 上传完成后返回 `fileId`，供 `/api/chat/message/send` 通过 `attachmentIds` 引用
+
+### 上传范围建议
+
+- 图片优先支持：`jpg`、`jpeg`、`png`、`webp`
+- 单文件大小、分片大小、总分片数由服务端统一限制
+- 发送聊天消息时，仅允许引用当前用户已上传完成的附件
+
+### 7.1 初始化上传任务
+
+```http
+POST /api/file/upload/init
+Content-Type: application/json
+```
+
+```json
+{
+  "fileName": "diagram.png",
+  "fileSize": 5242880,
+  "contentType": "image/png",
+  "fileMd5": "5d41402abc4b2a76b9719d911017c592",
+  "chunkSize": 1048576,
+  "totalChunks": 5
+}
+```
+
+响应建议：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "uploadId": "upload_20260519_001",
+    "fileId": 3001,
+    "chunkSize": 1048576,
+    "totalChunks": 5,
+    "uploadedChunks": []
+  }
+}
+```
+
+### 7.2 上传文件分片
+
+```http
+POST /api/file/upload/chunk
+Content-Type: multipart/form-data
+```
+
+表单字段建议：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| uploadId | String | 是 | 上传任务 ID |
+| chunkIndex | Integer | 是 | 分片下标，从 `0` 开始 |
+| totalChunks | Integer | 是 | 总分片数 |
+| chunkMd5 | String | 否 | 当前分片摘要，便于校验 |
+| file | Binary | 是 | 当前分片内容 |
+
+### 7.3 完成上传
+
+```http
+POST /api/file/upload/complete
+Content-Type: application/json
+```
+
+```json
+{
+  "uploadId": "upload_20260519_001"
+}
+```
+
+响应建议：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "fileId": 3001,
+    "fileName": "diagram.png",
+    "contentType": "image/png",
+    "fileUrl": "https://static.example.com/chat/diagram.png",
+    "thumbnailUrl": "https://static.example.com/chat/diagram-thumb.png"
+  }
+}
+```
+
+### 7.4 查询上传状态
+
+```http
+GET /api/file/upload/status?uploadId=upload_20260519_001
+```
+
+响应建议：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "uploadId": "upload_20260519_001",
+    "fileId": 3001,
+    "status": "UPLOADING",
+    "uploadedChunks": [0, 1, 2],
+    "totalChunks": 5
+  }
+}
+```
+
+### 断点续传规则建议
+
+1. 前端在重新选择同一文件后，优先调用 `/api/file/upload/init` 或 `/api/file/upload/status` 获取已上传分片。
+2. 前端只补传 `uploadedChunks` 中缺失的分片，避免整文件重传。
+3. 服务端在 `uploadId + chunkIndex` 维度保证幂等，重复分片上传直接覆盖或判重通过。
+4. 上传完成前，`fileId` 不能被聊天消息正式引用。
+5. 图片上传完成后，服务端应补齐基础元数据，例如宽高、缩略图地址或预览地址。
+
+---
+
+## 8. 重新生成回答
 
 如果你希望前端显式调用“重新生成”，可以单独做一个接口。
 
@@ -817,6 +959,7 @@ public class ChatSessionListItemVO {
 ```java
 package com.example.aichat.modules.chat.dto;
 
+import java.util.List;
 import lombok.Data;
 
 @Data
@@ -827,6 +970,7 @@ public class ChatMessageSendRequest {
     private Long modelId;
     private String modeCode;
     private String systemPrompt;
+    private List<Long> attachmentIds;
     private Boolean enableDeepThinking;
     private Boolean enableWebSearch;
     private Long regenerateMessageId;
@@ -837,6 +981,7 @@ public class ChatMessageSendRequest {
 
 - `modeCode` 决定本次请求使用哪套模式模板
 - `systemPrompt` 是本次请求附加提示词
+- `attachmentIds` 引用已上传完成的文件或图片
 - 最终发给模型的系统提示词由后端统一组装
 
 ### ChatMessageRegenerateRequest
@@ -1151,7 +1296,11 @@ chat:
 4. `POST /message/send` + SSE
 5. `POST /session/update-title`
 6. `POST /session/delete`
-7. `POST /message/regenerate`
+7. `POST /file/upload/init`
+8. `POST /file/upload/chunk`
+9. `POST /file/upload/complete`
+10. `GET /file/upload/status`
+11. `POST /message/regenerate`
 
 最先打通的主链路应该是：
 
@@ -1168,7 +1317,8 @@ chat:
 
 - “发消息”优先做成一个流式接口，而不是同步接口
 - `DTO / VO` 保持够用，不提前过度抽象
-- 多模态、文件、搜索都先预留字段，不进入主流程
+- 图片上传和断点续传进入需求设计范围，但实现仍按独立能力推进
+- 其他多模态、搜索先预留字段，不进入主流程
 - 会话删除按逻辑删除考虑
 - 重新生成能力保留单独接口，也可后续合并
 
