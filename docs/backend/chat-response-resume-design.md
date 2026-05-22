@@ -6,6 +6,10 @@
 
 本文档用于明确 GPT Plus 项目第一版“聊天响应中断后继续”的技术方案，覆盖问题边界、现有代码基础、后端接口、消息状态、前端交互和实现顺序，作为后续开发的统一依据。
 
+配套流程图文档见：
+
+- [chat-response-resume-flow.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/chat-response-resume-flow.md)
+
 当前方案面向 MVP，优先保证：
 
 - 流式回答在网络中断、页面刷新或前端主动停止后，可以继续生成

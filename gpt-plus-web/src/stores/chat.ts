@@ -13,6 +13,7 @@ import { http } from '@/lib/http'
 import type {
   ChatMessageItem,
   ChatMessageListResponse,
+  ChatMessageRegenerateRequest,
   ChatMessageSendRequest,
   ChatModelOption,
   ChatSessionCreateResponse,
@@ -42,11 +43,14 @@ export interface ChatMessage {
   content: string
   modelName?: string | null
   createdAt: string
-  status?: 'streaming' | 'done' | 'error'
+  status?: 'streaming' | 'done' | 'error' | 'interrupted'
   retryContent?: string
 }
 
 const EMPTY_SESSION_TITLE = '新会话'
+const MESSAGE_STATUS_FAILED = 0
+const MESSAGE_STATUS_INTERRUPTED = 2
+const MESSAGE_STATUS_GENERATING = 3
 
 function formatRelativeTime(value: string | null) {
   if (!value) {
@@ -78,13 +82,28 @@ function normalizeSession(session: ChatSessionListItem): SessionPreview {
   }
 }
 
-function normalizeMessage(message: ChatMessageItem): ChatMessage {
+function normalizeMessageStatus(status: number): ChatMessage['status'] {
+  switch (status) {
+    case MESSAGE_STATUS_GENERATING:
+      return 'streaming'
+    case MESSAGE_STATUS_INTERRUPTED:
+      return 'interrupted'
+    case MESSAGE_STATUS_FAILED:
+      return 'error'
+    default:
+      return 'done'
+  }
+}
+
+function normalizeMessage(message: ChatMessageItem, retryContent?: string): ChatMessage {
   return {
     id: message.messageId,
     role: message.role,
     content: message.content,
     modelName: message.modelName,
     createdAt: formatRelativeTime(message.createdAt),
+    status: normalizeMessageStatus(message.status),
+    retryContent,
   }
 }
 
@@ -108,6 +127,10 @@ export const useChatStore = defineStore('chat', () => {
   const availableModels = ref<ChatModelOption[]>([...FALLBACK_CHAT_MODEL_OPTIONS])
   const currentSessionTitle = ref(EMPTY_SESSION_TITLE)
   const lastRetryContent = ref('')
+  let activeStreamAbortController: AbortController | null = null
+  let activeStreamSessionId: number | null = null
+  let activeStreamMessageId: number | null = null
+  let activeStopRequested = false
 
   const activeSession = computed(() => sessions.value.find((session) => session.id === currentSessionId.value) ?? null)
   const currentModelOption = computed(
@@ -177,7 +200,15 @@ export const useChatStore = defineStore('chat', () => {
         sessionId,
       })
 
-      messages.value = response.messageList.map(normalizeMessage)
+      let lastUserContent = ''
+      messages.value = response.messageList.map((message) => {
+        const retryContent = message.role === 'assistant' ? lastUserContent : message.content
+        const normalizedMessage = normalizeMessage(message, retryContent)
+        if (message.role === 'user') {
+          lastUserContent = message.content
+        }
+        return normalizedMessage
+      })
       currentSessionTitle.value = response.title || '未命名会话'
       currentMode.value = response.modeCode
       const matchedSession = sessions.value.find((session) => session.id === sessionId)
@@ -263,6 +294,186 @@ export const useChatStore = defineStore('chat', () => {
     return createSession()
   }
 
+  function isAbortError(error: unknown) {
+    return error instanceof Error && error.name === 'AbortError'
+  }
+
+  function getActiveStreamMessage() {
+    if (!activeStreamMessageId) {
+      return null
+    }
+    return messages.value.find((message) => message.id === activeStreamMessageId) ?? null
+  }
+
+  function upsertAssistantStreamMessage(startEvent: ChatStreamStartEvent, fallbackAssistantId: number | null, retryContent?: string) {
+    const nextMessageId = startEvent.messageId || fallbackAssistantId || Date.now()
+    activeStreamMessageId = nextMessageId
+    const existingMessage = messages.value.find((message) => message.id === nextMessageId)
+
+    if (existingMessage) {
+      messages.value = messages.value.map((message) =>
+        message.id === nextMessageId
+          ? {
+              ...message,
+              modelName: startEvent.modelName,
+              createdAt: 'streaming',
+              status: 'streaming',
+            }
+          : message,
+      )
+      return
+    }
+
+    messages.value = [
+      ...messages.value,
+      {
+        id: nextMessageId,
+        role: 'assistant',
+        content: '',
+        modelName: startEvent.modelName,
+        createdAt: 'streaming',
+        status: 'streaming',
+        retryContent,
+      },
+    ]
+  }
+
+  function markAssistantMessageStatus(
+    messageId: number,
+    status: ChatMessage['status'],
+    patch?: Partial<Pick<ChatMessage, 'content' | 'createdAt' | 'modelName'>>,
+  ) {
+    messages.value = messages.value.map((message) =>
+      message.id === messageId
+        ? {
+            ...message,
+            status,
+            ...patch,
+          }
+        : message,
+    )
+  }
+
+  function scheduleMessageRefresh(sessionId: number, delayMs = 450) {
+    window.setTimeout(() => {
+      if (currentSessionId.value === sessionId && !isMessagesLoading.value) {
+        void loadMessages(sessionId)
+      }
+    }, delayMs)
+  }
+
+  async function streamAssistantResponse(options: {
+    path: '/chat/message/send' | '/chat/message/regenerate'
+    payload: ChatMessageSendRequest | ChatMessageRegenerateRequest
+    sessionId: number
+    fallbackAssistantId?: number | null
+    retryContent?: string
+  }) {
+    isResponding.value = true
+    errorMessage.value = ''
+    activeStreamAbortController = new AbortController()
+    activeStreamSessionId = options.sessionId
+    activeStreamMessageId = options.fallbackAssistantId ?? null
+    activeStopRequested = false
+
+    let assistantInserted = false
+    let streamErrored = false
+
+    try {
+      await http.stream(
+        options.path,
+        options.payload,
+        (event, rawPayload) => {
+          switch (event) {
+            case 'message_start': {
+              const startEvent = JSON.parse(rawPayload) as ChatStreamStartEvent
+              assistantInserted = true
+              upsertAssistantStreamMessage(startEvent, options.fallbackAssistantId ?? null, options.retryContent)
+              break
+            }
+            case 'message_delta': {
+              const deltaEvent = JSON.parse(rawPayload) as ChatStreamDeltaEvent
+              activeStreamMessageId = deltaEvent.messageId
+              messages.value = messages.value.map((message) =>
+                message.id === deltaEvent.messageId
+                  ? {
+                      ...message,
+                      status: 'streaming',
+                      content: `${message.content}${deltaEvent.delta}`,
+                    }
+                  : message,
+              )
+              break
+            }
+            case 'message_end': {
+              const endEvent = JSON.parse(rawPayload) as ChatStreamEndEvent
+              activeStreamMessageId = endEvent.messageId
+              markAssistantMessageStatus(endEvent.messageId, 'done', {
+                createdAt: formatRelativeTime(endEvent.createdAt),
+              })
+              break
+            }
+            case 'message_error': {
+              streamErrored = true
+              const errorEvent = JSON.parse(rawPayload) as ChatStreamErrorEvent
+              const targetId = errorEvent.messageId || activeStreamMessageId || options.fallbackAssistantId || Date.now()
+              activeStreamMessageId = targetId
+              markAssistantMessageStatus(targetId, 'error', {
+                content: getActiveStreamMessage()?.content || errorEvent.errorMessage,
+              })
+              throw new Error(errorEvent.errorMessage || errorEvent.errorCode)
+            }
+            default:
+              break
+          }
+        },
+        activeStreamAbortController.signal,
+      )
+
+      await loadSessions()
+      return true
+    } catch (error) {
+      const currentAssistantMessage = getActiveStreamMessage()
+      const hasPartialContent = Boolean(currentAssistantMessage?.content?.trim())
+
+      if (!streamErrored && (activeStopRequested || (assistantInserted && hasPartialContent))) {
+        if (currentAssistantMessage) {
+          markAssistantMessageStatus(currentAssistantMessage.id, 'interrupted')
+        }
+        scheduleMessageRefresh(options.sessionId)
+        if (!activeStopRequested) {
+          errorMessage.value = '回答连接已中断，可点击继续生成'
+        }
+        return false
+      }
+
+      errorMessage.value = formatErrorMessage(error, '消息发送失败')
+      if (!assistantInserted && options.fallbackAssistantId) {
+        messages.value = [
+          ...messages.value,
+          {
+            id: options.fallbackAssistantId,
+            role: 'assistant',
+            content: errorMessage.value,
+            createdAt: 'error',
+            status: 'error',
+            retryContent: options.retryContent,
+          },
+        ]
+      }
+      if (isAbortError(error) && activeStopRequested && activeStreamSessionId) {
+        scheduleMessageRefresh(activeStreamSessionId)
+      }
+      return false
+    } finally {
+      isResponding.value = false
+      activeStreamAbortController = null
+      activeStreamSessionId = null
+      activeStreamMessageId = null
+      activeStopRequested = false
+    }
+  }
+
   async function sendMessage(content: string) {
     const trimmed = content.trim()
     if (!trimmed || isResponding.value) {
@@ -274,13 +485,11 @@ export const useChatStore = defineStore('chat', () => {
       return false
     }
 
-    isResponding.value = true
     errorMessage.value = ''
     lastRetryContent.value = trimmed
 
     const userMessageId = Date.now()
     const fallbackAssistantId = userMessageId + 1
-    let assistantInserted = false
 
     // 先乐观插入用户消息，保证按下发送后页面立即反馈，不等待后端 SSE 首包。
     messages.value = [
@@ -305,94 +514,38 @@ export const useChatStore = defineStore('chat', () => {
         DEFAULT_CHAT_MODEL.id,
     }
 
-    try {
-      await http.stream('/chat/message/send', payload, (event, rawPayload) => {
-        switch (event) {
-          case 'message_start': {
-            // 后端创建 assistant 占位后返回真实 messageId，后续 delta/end 都靠它定位消息。
-            const startEvent = JSON.parse(rawPayload) as ChatStreamStartEvent
-            assistantInserted = true
-            messages.value = [
-              ...messages.value,
-              {
-                id: startEvent.messageId || fallbackAssistantId,
-                role: 'assistant',
-                content: '',
-                modelName: startEvent.modelName,
-                createdAt: 'streaming',
-                status: 'streaming',
-                retryContent: trimmed,
-              },
-            ]
-            break
-          }
-          case 'message_delta': {
-            // 每个 delta 只追加文本，不立即刷新会话列表，减少流式过程中的额外请求。
-            const deltaEvent = JSON.parse(rawPayload) as ChatStreamDeltaEvent
-            messages.value = messages.value.map((message) =>
-              message.id === deltaEvent.messageId
-                ? {
-                    ...message,
-                    content: `${message.content}${deltaEvent.delta}`,
-                  }
-                : message,
-            )
-            break
-          }
-          case 'message_end': {
-            const endEvent = JSON.parse(rawPayload) as ChatStreamEndEvent
-            messages.value = messages.value.map((message) =>
-              message.id === endEvent.messageId
-                ? {
-                    ...message,
-                    status: 'done',
-                    createdAt: formatRelativeTime(endEvent.createdAt),
-                  }
-                : message,
-            )
-            break
-          }
-          case 'message_error': {
-            const errorEvent = JSON.parse(rawPayload) as ChatStreamErrorEvent
-            const targetId = errorEvent.messageId || fallbackAssistantId
-            messages.value = messages.value.map((message) =>
-              message.id === targetId
-                ? {
-                    ...message,
-                    status: 'error',
-                    content: message.content || errorEvent.errorMessage,
-                  }
-                : message,
-            )
-            throw new Error(errorEvent.errorMessage || errorEvent.errorCode)
-          }
-          default:
-            break
-        }
-      })
+    return streamAssistantResponse({
+      path: '/chat/message/send',
+      payload,
+      sessionId,
+      fallbackAssistantId,
+      retryContent: trimmed,
+    })
+  }
 
-      await loadSessions()
-      return true
-    } catch (error) {
-      errorMessage.value = formatErrorMessage(error, '消息发送失败')
-      if (!assistantInserted) {
-        // 如果后端连 assistant 占位都没创建，前端补一条失败消息承载重试入口。
-        messages.value = [
-          ...messages.value,
-          {
-            id: fallbackAssistantId,
-            role: 'assistant',
-            content: errorMessage.value,
-            createdAt: 'error',
-            status: 'error',
-            retryContent: trimmed,
-          },
-        ]
-      }
+  async function continueMessage(messageId: number) {
+    if (isResponding.value || !currentSessionId.value) {
       return false
-    } finally {
-      isResponding.value = false
     }
+
+    const payload: ChatMessageRegenerateRequest = {
+      sessionId: currentSessionId.value,
+      regenerateMessageId: messageId,
+      modeCode: currentMode.value,
+      modelId:
+        findChatModelByCode(availableModels.value, currentModel.value)?.id ??
+        activeSession.value?.defaultModelId ??
+        DEFAULT_CHAT_MODEL.id,
+    }
+
+    const retryContent = messages.value.find((message) => message.id === messageId)?.retryContent
+    return streamAssistantResponse({
+      path: '/chat/message/regenerate',
+      payload,
+      sessionId: currentSessionId.value,
+      fallbackAssistantId: messageId,
+      retryContent,
+    })
   }
 
   async function retryMessage(content?: string) {
@@ -402,6 +555,16 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     return sendMessage(nextContent)
+  }
+
+  function stopStreamingMessage() {
+    if (!activeStreamAbortController || !isResponding.value) {
+      return false
+    }
+
+    activeStopRequested = true
+    activeStreamAbortController.abort()
+    return true
   }
 
   function clearErrorMessage() {
@@ -515,9 +678,11 @@ export const useChatStore = defineStore('chat', () => {
     loadModels,
     loadSessions,
     messages,
+    continueMessage,
     retryMessage,
     sessionActionSessionId,
     selectSession,
+    stopStreamingMessage,
     sendMessage,
     sessions,
     updateSessionTitle,

@@ -94,6 +94,13 @@ export interface ChatMessageSendRequest {
   systemPrompt?: string | null
 }
 
+export interface ChatMessageRegenerateRequest {
+  sessionId: number
+  regenerateMessageId: number
+  modelId?: number | null
+  modeCode?: 'quick' | 'expert'
+}
+
 export interface ChatStreamStartEvent {
   sessionId: number
   messageId: number

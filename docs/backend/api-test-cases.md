@@ -1,6 +1,6 @@
 # 后端接口测试用例
 
-最后更新：2026-05-19
+最后更新：2026-05-20
 
 ## 说明
 
@@ -304,6 +304,51 @@ curl -s -X POST "http://127.0.0.1:8080/api/chat/session/delete" \
 ```
 
 - 数据库中 `chat_session.status` 被更新为逻辑删除状态
+
+### 10. 中断后继续生成
+
+#### 测试目标
+
+- 验证流式回答中断后，assistant 消息会保留已生成内容
+- 验证消息状态会落到 `INTERRUPTED`
+- 验证 `POST /api/chat/message/regenerate` 可以从中断消息继续生成
+
+#### 建议步骤
+
+1. 先调用一次 `POST /api/chat/message/send`
+2. 在收到部分 `message_delta` 后主动中断前端请求或关闭页面
+3. 重新查询消息列表，确认目标 assistant 消息状态和部分内容
+4. 调用 `POST /api/chat/message/regenerate`
+5. 确认继续收到 `message_start -> message_delta -> message_end`
+
+#### 查询中断消息列表
+
+```bash
+curl -s "http://127.0.0.1:8080/api/chat/message/list?sessionId=1" \
+  -H "X-User-Id: 1"
+```
+
+#### 继续生成请求
+
+```bash
+curl -N -X POST "http://127.0.0.1:8080/api/chat/message/regenerate" \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: 1" \
+  -d '{
+    "sessionId": 1,
+    "regenerateMessageId": 2,
+    "modelId": 1,
+    "modeCode": "quick"
+  }'
+```
+
+#### 预期
+
+- 中断后的 assistant 消息应保留部分 `content`
+- 中断后的 assistant 消息 `status = 2`
+- 继续生成时复用原 assistant 消息 ID，而不是新建一条 assistant 消息
+- 继续完成后 assistant 消息 `status = 1`
+- 消息内容应在原有前缀后继续追加，而不是整段清空重来
 
 ## 数据库辅助检查
 

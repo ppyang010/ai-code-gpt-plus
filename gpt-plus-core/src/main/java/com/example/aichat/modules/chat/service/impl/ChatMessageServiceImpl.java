@@ -1,7 +1,6 @@
 package com.example.aichat.modules.chat.service.impl;
 
 import com.example.aichat.common.enums.ErrorCode;
-import com.example.aichat.common.enums.ChatModeEnum;
 import com.example.aichat.common.enums.ChatRoleEnum;
 import com.example.aichat.common.enums.MessageStatusEnum;
 import com.example.aichat.common.exception.BizException;
@@ -12,6 +11,7 @@ import com.example.aichat.infrastructure.ai.ChatModelMessage;
 import com.example.aichat.infrastructure.ai.ChatModelRequest;
 import com.example.aichat.infrastructure.ai.ChatModelResponse;
 import com.example.aichat.infrastructure.ai.ChatModelStreamChunk;
+import com.example.aichat.infrastructure.ai.ChatStreamInterruptedException;
 import com.example.aichat.infrastructure.ai.deepseek.DeepSeekProperties;
 import com.example.aichat.modules.billing.entity.UserTokenUsageDO;
 import com.example.aichat.modules.billing.mapper.UserTokenUsageMapper;
@@ -55,6 +55,10 @@ import tools.jackson.databind.ObjectMapper;
 public class ChatMessageServiceImpl implements ChatMessageService {
 
     private static final int SESSION_STATUS_ACTIVE = 1;
+    private static final int CONTEXT_MESSAGE_LIMIT = 10;
+    private static final int PARTIAL_CONTENT_FLUSH_CHARS = 160;
+    private static final long PARTIAL_CONTENT_FLUSH_INTERVAL_MS = 1500L;
+    private static final int RESUME_PREFIX_MAX_LENGTH = 2000;
     private static final Logger log = LoggerFactory.getLogger(ChatMessageServiceImpl.class);
 
     private final ChatPromptResolver chatPromptResolver;
@@ -112,7 +116,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
      *
      * <p>该方法只负责同步阶段的请求校验、会话/模型解析、用户消息落库和异步任务派发；
      * 真正的模型调用、assistant 消息落库、增量事件推送、token 统计和供应商调用日志，
-     * 都在 {@link #streamAssistantAnswer(Long, ChatSessionDO, ModelConfigDO, ChatModelRequest, int, SseEmitter)}
+     * 都在 {@link #streamAssistantAnswer(Long, ChatSessionDO, ModelConfigDO, ChatModelRequest, ChatMessageDO, boolean, String, SseEmitter)}
      * 中完成。这样可以让控制器尽快拿到 {@link SseEmitter}，避免 HTTP 请求线程被模型流式响应长期占用。</p>
      */
     @Override
@@ -151,20 +155,78 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         // 更新会话最后活跃时间，列表页可以立刻按最新发送行为排序。
         chatSessionMapper.updateLastMessageAt(session.getId(), LocalDateTime.now());
 
+        ChatMessageDO assistantMessage = buildAssistantPlaceholder(userId, session.getId(), model, nextSeqNo + 1);
         // assistant 的占位消息、模型流式调用、SSE 增量推送和最终 token/日志回写都在异步流程里完成。
         streamAssistantAnswer(
                 userId,
                 session,
                 model,
                 modelRequest,
-                nextSeqNo + 1,
+                assistantMessage,
+                true,
+                "",
                 emitter
         );
     }
 
     @Override
     public void regenerateMessage(Long userId, ChatMessageRegenerateRequest request, SseEmitter emitter) {
-        throw new BizException(ErrorCode.CHAT_REGENERATE_NOT_IMPLEMENTED);
+        if (request.getSessionId() == null) {
+            throw new BizException(ErrorCode.CHAT_SESSION_NOT_FOUND);
+        }
+        if (request.getRegenerateMessageId() == null) {
+            throw new BizException(ErrorCode.CHAT_MESSAGE_NOT_FOUND);
+        }
+
+        ChatSessionDO session = getActiveSession(userId, request.getSessionId());
+        ChatMessageDO assistantMessage = getSessionMessage(session.getId(), request.getRegenerateMessageId());
+        if (!ChatRoleEnum.ASSISTANT.getCode().equals(assistantMessage.getRole())) {
+            throw new BizException(ErrorCode.CHAT_MESSAGE_NOT_INTERRUPTIBLE);
+        }
+        if (Objects.equals(assistantMessage.getStatus(), MessageStatusEnum.GENERATING.getCode())) {
+            throw new BizException(ErrorCode.CHAT_MESSAGE_ALREADY_GENERATING);
+        }
+        if (!Objects.equals(assistantMessage.getStatus(), MessageStatusEnum.INTERRUPTED.getCode())) {
+            throw new BizException(ErrorCode.CHAT_MESSAGE_NOT_INTERRUPTIBLE);
+        }
+
+        ChatMessageDO previousUserMessage = getPreviousUserMessage(session.getId(), assistantMessage.getSeqNo());
+        ModelConfigDO model = resolveModel(session, request.getModelId() != null ? request.getModelId() : assistantMessage.getModelId());
+        String basePrompt = chatPromptResolver.resolveSystemPrompt(
+                request.getModeCode() != null ? request.getModeCode() : session.getModeCode(),
+                session.getSystemPrompt(),
+                null
+        );
+        ChatModelRequest modelRequest = buildResumeModelRequest(
+                session,
+                model,
+                previousUserMessage.getContent(),
+                basePrompt,
+                request.getModeCode(),
+                assistantMessage
+        );
+
+        // 继续生成前先原子占住该消息，避免同一条中断消息被并发点击多次。
+        int updatedRows = chatMessageMapper.updateStatusByIdAndCurrentStatus(
+                assistantMessage.getId(),
+                MessageStatusEnum.INTERRUPTED.getCode(),
+                MessageStatusEnum.GENERATING.getCode()
+        );
+        if (updatedRows == 0) {
+            throw new BizException(ErrorCode.CHAT_MESSAGE_ALREADY_GENERATING);
+        }
+
+        resetAssistantMessageForResume(assistantMessage, model);
+        streamAssistantAnswer(
+                userId,
+                session,
+                model,
+                modelRequest,
+                assistantMessage,
+                false,
+                assistantMessage.getContent(),
+                emitter
+        );
     }
 
     private void streamAssistantAnswer(
@@ -172,14 +234,22 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             ChatSessionDO session,
             ModelConfigDO model,
             ChatModelRequest modelRequest,
-            int assistantSeqNo,
+            ChatMessageDO assistantMessage,
+            boolean shouldInsertAssistantMessage,
+            String persistedPrefix,
             SseEmitter emitter
     ) {
         // 模型调用放到异步线程中执行，HTTP 请求线程可以尽快返回 SseEmitter 并持续推送增量事件。
         CompletableFuture.runAsync(() -> {
-            ChatMessageDO assistantMessage = buildAssistantPlaceholder(userId, session.getId(), model, assistantSeqNo);
+            StringBuilder contentBuilder = new StringBuilder(StringUtils.hasText(persistedPrefix) ? persistedPrefix : "");
+            long[] lastPersistedAt = {System.currentTimeMillis()};
+            int[] lastPersistedLength = {contentBuilder.length()};
             try {
-                chatMessageMapper.insert(assistantMessage);
+                if (shouldInsertAssistantMessage) {
+                    chatMessageMapper.insert(assistantMessage);
+                } else {
+                    chatMessageMapper.updateById(assistantMessage);
+                }
                 sendStart(session.getId(), assistantMessage.getId(), model, emitter);
 
                 ChatModelClient chatModelClient = chatModelClientRegistry.resolve(modelRequest);
@@ -187,11 +257,18 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 long startedAt = System.currentTimeMillis();
                 ChatModelResponse modelResponse = chatModelClient.streamChat(
                         modelRequest,
-                        chunk -> emitChunk(emitter, assistantMessage.getId(), chunk)
+                        chunk -> appendAndEmitChunk(
+                                emitter,
+                                assistantMessage,
+                                chunk,
+                                contentBuilder,
+                                lastPersistedAt,
+                                lastPersistedLength
+                        )
                 );
 
-                // 流式结束后再一次性回写 assistant 正文和 token，避免每个增量 chunk 都打数据库。
-                assistantMessage.setContent(modelResponse.getContent());
+                // 流式结束后统一回写完整正文和 token；期间的部分内容已按阈值做过增量持久化。
+                assistantMessage.setContent(contentBuilder.toString());
                 assistantMessage.setFinishReason(modelResponse.getFinishReason());
                 assistantMessage.setStatus(MessageStatusEnum.NORMAL.getCode());
                 assistantMessage.setPromptTokens(defaultInt(modelResponse.getPromptTokens()));
@@ -221,21 +298,29 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 emitter.complete();
             } catch (Exception exception) {
                 try {
-                    // 失败也要落一条 assistant 失败记录，前端刷新历史时可以看到上次请求失败。
-                    assistantMessage.setStatus(MessageStatusEnum.FAILED.getCode());
-                    assistantMessage.setFinishReason("error");
-                    if (assistantMessage.getId() != null) {
-                        chatMessageMapper.updateById(assistantMessage);
+                    if (isClientStreamInterrupted(exception)) {
+                        persistInterruptedMessage(assistantMessage, contentBuilder.toString());
+                    } else if (hasRecoverableContent(contentBuilder)) {
+                        persistInterruptedMessage(assistantMessage, contentBuilder.toString());
+                    } else {
+                        persistFailedMessage(assistantMessage);
                     }
-                    persistFailureUsage(userId, session, model, modelRequest, assistantMessage, exception);
-                    ChatStreamErrorEvent errorEvent = new ChatStreamErrorEvent();
-                    errorEvent.setMessageId(assistantMessage.getId());
-                    errorEvent.setErrorCode("CHAT_STREAM_ERROR");
-                    errorEvent.setErrorMessage(exception.getMessage());
-                    emitter.send(SseEmitter.event().name("message_error").data(errorEvent));
-                } catch (Exception ignored) {
+
+                    if (!isClientStreamInterrupted(exception) && shouldPersistFailureUsage(exception)) {
+                        persistFailureUsage(userId, session, model, modelRequest, assistantMessage, exception);
+                    }
+
+                    if (!isClientStreamInterrupted(exception) && !hasRecoverableContent(contentBuilder)) {
+                        ChatStreamErrorEvent errorEvent = new ChatStreamErrorEvent();
+                        errorEvent.setMessageId(assistantMessage.getId());
+                        errorEvent.setErrorCode("CHAT_STREAM_ERROR");
+                        errorEvent.setErrorMessage(exception.getMessage());
+                        emitter.send(SseEmitter.event().name("message_error").data(errorEvent));
+                    }
+                } catch (Exception finalizeException) {
+                    log.warn("Failed to finalize interrupted chat stream for messageId={}", assistantMessage.getId(), finalizeException);
                 }
-                emitter.completeWithError(exception);
+                emitter.complete();
             }
         });
     }
@@ -257,6 +342,22 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             throw new BizException(ErrorCode.CHAT_SESSION_NOT_FOUND);
         }
         return session;
+    }
+
+    private ChatMessageDO getSessionMessage(Long sessionId, Long messageId) {
+        ChatMessageDO message = chatMessageMapper.selectById(messageId);
+        if (message == null || !Objects.equals(message.getSessionId(), sessionId)) {
+            throw new BizException(ErrorCode.CHAT_MESSAGE_NOT_FOUND);
+        }
+        return message;
+    }
+
+    private ChatMessageDO getPreviousUserMessage(Long sessionId, Integer assistantSeqNo) {
+        ChatMessageDO previousUserMessage = chatMessageMapper.selectPreviousUserMessage(sessionId, assistantSeqNo);
+        if (previousUserMessage == null) {
+            throw new BizException(ErrorCode.CHAT_MESSAGE_NOT_FOUND, "未找到可继续生成的用户消息");
+        }
+        return previousUserMessage;
     }
 
     private ModelConfigDO resolveModel(ChatSessionDO session, Long requestModelId) {
@@ -313,12 +414,58 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         return entity;
     }
 
+    private void resetAssistantMessageForResume(ChatMessageDO assistantMessage, ModelConfigDO model) {
+        assistantMessage.setModelId(model == null ? null : model.getId());
+        assistantMessage.setStatus(MessageStatusEnum.GENERATING.getCode());
+        assistantMessage.setFinishReason(null);
+        assistantMessage.setPromptTokens(0);
+        assistantMessage.setCompletionTokens(0);
+        assistantMessage.setTotalTokens(0);
+    }
+
     private ChatModelRequest buildModelRequest(
             ChatSessionDO session,
             ModelConfigDO model,
             String userContent,
             String finalPrompt,
             String requestModeCode
+    ) {
+        return buildModelRequest(
+                session,
+                model,
+                userContent,
+                finalPrompt,
+                requestModeCode,
+                loadContextMessages(session.getId(), CONTEXT_MESSAGE_LIMIT)
+        );
+    }
+
+    private ChatModelRequest buildResumeModelRequest(
+            ChatSessionDO session,
+            ModelConfigDO model,
+            String userContent,
+            String basePrompt,
+            String requestModeCode,
+            ChatMessageDO interruptedAssistantMessage
+    ) {
+        String resumePrompt = buildResumePrompt(basePrompt, interruptedAssistantMessage.getContent());
+        return buildModelRequest(
+                session,
+                model,
+                userContent,
+                resumePrompt,
+                requestModeCode,
+                loadContextMessagesBeforeSeqNo(session.getId(), interruptedAssistantMessage.getSeqNo(), CONTEXT_MESSAGE_LIMIT)
+        );
+    }
+
+    private ChatModelRequest buildModelRequest(
+            ChatSessionDO session,
+            ModelConfigDO model,
+            String userContent,
+            String finalPrompt,
+            String requestModeCode,
+            List<ChatModelMessage> contextMessages
     ) {
         ChatModelRequest request = new ChatModelRequest();
         request.setSessionId(session.getId());
@@ -328,30 +475,120 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         request.setModeCode(requestModeCode != null ? requestModeCode : session.getModeCode());
         request.setSystemPrompt(finalPrompt);
         request.setUserContent(userContent);
-        request.setMessages(loadContextMessages(session.getId()));
+        request.setMessages(contextMessages);
         return request;
     }
 
-    private List<ChatModelMessage> loadContextMessages(Long sessionId) {
-        // 第一版只取最近 10 条上下文，控制 token 成本；后续可接入模型 contextWindow 做动态裁剪。
-        return chatMessageMapper.selectLatestMessages(sessionId, 10).stream()
+    private List<ChatModelMessage> loadContextMessages(Long sessionId, int limit) {
+        // 第一版只取最近若干条上下文，控制 token 成本；后续可接入模型 contextWindow 做动态裁剪。
+        return chatMessageMapper.selectLatestMessages(sessionId, limit).stream()
                 .sorted((left, right) -> Integer.compare(left.getSeqNo(), right.getSeqNo()))
                 .map(message -> new ChatModelMessage(message.getRole(), message.getContent()))
                 .collect(Collectors.toList());
     }
 
-    private void emitChunk(SseEmitter emitter, Long messageId, ChatModelStreamChunk chunk) {
+    private List<ChatModelMessage> loadContextMessagesBeforeSeqNo(Long sessionId, Integer beforeSeqNo, int limit) {
+        return chatMessageMapper.selectLatestMessagesBeforeSeqNo(sessionId, beforeSeqNo, limit).stream()
+                .sorted((left, right) -> Integer.compare(left.getSeqNo(), right.getSeqNo()))
+                .map(message -> new ChatModelMessage(message.getRole(), message.getContent()))
+                .collect(Collectors.toList());
+    }
+
+    private String buildResumePrompt(String basePrompt, String assistantContent) {
+        StringBuilder prompt = new StringBuilder();
+        if (StringUtils.hasText(basePrompt)) {
+            prompt.append(basePrompt.trim()).append("\n\n");
+        }
+        prompt.append("下面是一段被中断的回答，请从它停止的位置继续往后写。\n");
+        prompt.append("不要重复已经输出的内容，不要重新开头，不要改写前文语气。\n");
+        prompt.append("已生成前缀：\n");
+        prompt.append(extractResumePrefix(assistantContent));
+        return prompt.toString();
+    }
+
+    private String extractResumePrefix(String assistantContent) {
+        if (!StringUtils.hasText(assistantContent)) {
+            return "";
+        }
+        if (assistantContent.length() <= RESUME_PREFIX_MAX_LENGTH) {
+            return assistantContent;
+        }
+        // 继续生成只需要最近一段前缀帮助模型衔接，避免把整篇半成品重新塞进提示词导致 token 膨胀。
+        return assistantContent.substring(assistantContent.length() - RESUME_PREFIX_MAX_LENGTH);
+    }
+
+    private void appendAndEmitChunk(
+            SseEmitter emitter,
+            ChatMessageDO assistantMessage,
+            ChatModelStreamChunk chunk,
+            StringBuilder contentBuilder,
+            long[] lastPersistedAt,
+            int[] lastPersistedLength
+    ) {
         if (chunk == null || chunk.isDone()) {
             return;
         }
+        if (StringUtils.hasText(chunk.getDelta())) {
+            contentBuilder.append(chunk.getDelta());
+            persistPartialContentIfNeeded(assistantMessage, contentBuilder, lastPersistedAt, lastPersistedLength);
+        }
         ChatStreamDeltaEvent deltaEvent = new ChatStreamDeltaEvent();
-        deltaEvent.setMessageId(messageId);
+        deltaEvent.setMessageId(assistantMessage.getId());
         deltaEvent.setDelta(chunk.getDelta());
         try {
             emitter.send(SseEmitter.event().name("message_delta").data(deltaEvent));
         } catch (Exception exception) {
-            throw new BizException(ErrorCode.CHAT_STREAM_ERROR);
+            throw new ChatStreamInterruptedException("CLIENT_STREAM_INTERRUPTED", exception);
         }
+    }
+
+    private void persistPartialContentIfNeeded(
+            ChatMessageDO assistantMessage,
+            StringBuilder contentBuilder,
+            long[] lastPersistedAt,
+            int[] lastPersistedLength
+    ) {
+        int deltaLength = contentBuilder.length() - lastPersistedLength[0];
+        long now = System.currentTimeMillis();
+        if (deltaLength < PARTIAL_CONTENT_FLUSH_CHARS && now - lastPersistedAt[0] < PARTIAL_CONTENT_FLUSH_INTERVAL_MS) {
+            return;
+        }
+
+        assistantMessage.setContent(contentBuilder.toString());
+        chatMessageMapper.updateById(assistantMessage);
+        lastPersistedAt[0] = now;
+        lastPersistedLength[0] = contentBuilder.length();
+    }
+
+    private boolean hasRecoverableContent(StringBuilder contentBuilder) {
+        return contentBuilder != null && StringUtils.hasText(contentBuilder.toString());
+    }
+
+    private void persistInterruptedMessage(ChatMessageDO assistantMessage, String content) {
+        if (assistantMessage.getId() == null) {
+            return;
+        }
+        assistantMessage.setContent(content);
+        assistantMessage.setStatus(MessageStatusEnum.INTERRUPTED.getCode());
+        assistantMessage.setFinishReason("interrupted");
+        chatMessageMapper.updateById(assistantMessage);
+    }
+
+    private void persistFailedMessage(ChatMessageDO assistantMessage) {
+        if (assistantMessage.getId() == null) {
+            return;
+        }
+        assistantMessage.setStatus(MessageStatusEnum.FAILED.getCode());
+        assistantMessage.setFinishReason("error");
+        chatMessageMapper.updateById(assistantMessage);
+    }
+
+    private boolean shouldPersistFailureUsage(Exception exception) {
+        return exception instanceof ChatModelClientException;
+    }
+
+    private boolean isClientStreamInterrupted(Exception exception) {
+        return exception instanceof ChatStreamInterruptedException;
     }
 
     private int defaultInt(Integer value) {
@@ -547,7 +784,15 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
     private String resolveFailureResponsePayload(Exception exception) {
         if (exception instanceof ChatModelClientException modelClientException) {
-            return truncate(modelClientException.getResponsePayload(), 1000);
+            String responsePayload = truncate(modelClientException.getResponsePayload(), 1000);
+            if (!StringUtils.hasText(responsePayload)) {
+                return null;
+            }
+            try {
+                return objectMapper.writeValueAsString(objectMapper.readTree(responsePayload));
+            } catch (Exception ignored) {
+                return toJsonSafely(Map.of("rawResponse", responsePayload));
+            }
         }
         return null;
     }

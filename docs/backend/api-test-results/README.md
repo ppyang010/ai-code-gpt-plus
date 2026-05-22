@@ -1,6 +1,6 @@
 # API 测试结果
 
-最后更新：2026-05-15
+最后更新：2026-05-22
 
 ## 说明
 
@@ -20,12 +20,13 @@
 
 ## 最近一次结果
 
-- 最新结果： [2026-05-15-local-frontend-integration.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/api-test-results/2026-05-15-local-frontend-integration.md)
+- 最新结果： [2026-05-22-local-chat-response-resume.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/api-test-results/2026-05-22-local-chat-response-resume.md)
 - 执行环境：`local`
-- 执行主题：`frontend-integration`
-- 结果概览：前端接入所需的会话列表、创建会话、消息列表、发送消息和 SSE 链路已完成本地真实联调验证
+- 执行主题：`chat-response-resume`
+- 结果概览：`send -> interrupt -> regenerate` 链路已完成本地真实联调验证，前端本地入口与 `/api` 代理冒烟验证通过
 
 ## 历史结果
 
 - [2026-05-08-local-chat-streaming.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/api-test-results/2026-05-08-local-chat-streaming.md)
 - [2026-05-15-local-frontend-integration.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/api-test-results/2026-05-15-local-frontend-integration.md)
+- [2026-05-22-local-chat-response-resume.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/api-test-results/2026-05-22-local-chat-response-resume.md)

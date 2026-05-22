@@ -3,8 +3,10 @@ package com.example.aichat.common.handler;
 import com.example.aichat.common.dto.CommonResponse;
 import com.example.aichat.common.enums.ErrorCode;
 import com.example.aichat.common.exception.BizException;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.ConstraintViolationException;
 import java.util.stream.Collectors;
+import org.springframework.http.MediaType;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -53,7 +55,10 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public CommonResponse<Object> handleException(Exception exception) {
+    public CommonResponse<Object> handleException(Exception exception, HttpServletResponse response) {
+        if (isEventStreamResponse(response)) {
+            return null;
+        }
         return CommonResponse.failure(ErrorCode.INTERNAL_ERROR.getCode(), ErrorCode.INTERNAL_ERROR.getMessage());
     }
 
@@ -63,5 +68,11 @@ public class GlobalExceptionHandler {
 
     private String withFallback(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private boolean isEventStreamResponse(HttpServletResponse response) {
+        return response != null
+                && response.getContentType() != null
+                && response.getContentType().contains(MediaType.TEXT_EVENT_STREAM_VALUE);
     }
 }

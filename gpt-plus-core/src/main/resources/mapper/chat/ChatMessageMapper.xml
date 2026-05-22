@@ -19,10 +19,36 @@
         LIMIT #{limit}
     </select>
 
+    <select id="selectLatestMessagesBeforeSeqNo" resultType="com.example.aichat.modules.chat.entity.ChatMessageDO">
+        SELECT *
+        FROM chat_message
+        WHERE session_id = #{sessionId}
+          AND seq_no &lt; #{beforeSeqNo}
+        ORDER BY seq_no DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectPreviousUserMessage" resultType="com.example.aichat.modules.chat.entity.ChatMessageDO">
+        SELECT *
+        FROM chat_message
+        WHERE session_id = #{sessionId}
+          AND seq_no &lt; #{seqNo}
+          AND role = 'user'
+        ORDER BY seq_no DESC
+        LIMIT 1
+    </select>
+
     <select id="selectMaxSeqNo" resultType="java.lang.Integer">
         SELECT COALESCE(MAX(seq_no), 0)
         FROM chat_message
         WHERE session_id = #{sessionId}
     </select>
+
+    <update id="updateStatusByIdAndCurrentStatus">
+        UPDATE chat_message
+        SET status = #{targetStatus}
+        WHERE id = #{messageId}
+          AND status = #{expectedStatus}
+    </update>
 
 </mapper>

@@ -16,5 +16,22 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageDO> {
             @Param("limit") Integer limit
     );
 
+    List<ChatMessageDO> selectLatestMessagesBeforeSeqNo(
+            @Param("sessionId") Long sessionId,
+            @Param("beforeSeqNo") Integer beforeSeqNo,
+            @Param("limit") Integer limit
+    );
+
+    ChatMessageDO selectPreviousUserMessage(
+            @Param("sessionId") Long sessionId,
+            @Param("seqNo") Integer seqNo
+    );
+
     Integer selectMaxSeqNo(@Param("sessionId") Long sessionId);
+
+    int updateStatusByIdAndCurrentStatus(
+            @Param("messageId") Long messageId,
+            @Param("expectedStatus") Integer expectedStatus,
+            @Param("targetStatus") Integer targetStatus
+    );
 }

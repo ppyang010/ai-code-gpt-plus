@@ -57,7 +57,7 @@ async function request<T>(path: string, init?: RequestInit, query?: Record<strin
 
 type StreamHandler = (event: string, payload: string) => void
 
-async function stream(path: string, body: unknown, onEvent: StreamHandler) {
+async function stream(path: string, body: unknown, onEvent: StreamHandler, signal?: AbortSignal) {
   const response = await fetch(buildUrl(path), {
     method: 'POST',
     headers: {
@@ -65,6 +65,7 @@ async function stream(path: string, body: unknown, onEvent: StreamHandler) {
       'Content-Type': 'application/json',
       'X-User-Id': userIdHeaderValue,
     },
+    signal,
     body: JSON.stringify(body),
   })
 

@@ -201,6 +201,10 @@ async function handleRetryClick(content?: string) {
   return success
 }
 
+async function handleContinueClick(messageId: number) {
+  return chatStore.continueMessage(messageId)
+}
+
 function getMessageName(message: ChatMessage) {
   if (message.role === 'assistant') {
     return message.modelName || 'Assistant'
@@ -216,6 +220,10 @@ function getMessageName(message: ChatMessage) {
 function getMessageDatetime(message: ChatMessage) {
   if (message.status === 'streaming') {
     return 'Streaming...'
+  }
+
+  if (message.status === 'interrupted') {
+    return 'Interrupted'
   }
 
   if (message.status === 'error') {
@@ -376,15 +384,25 @@ async function handleMessageAction(type: string, item: { id: number; sourceMessa
   }
 
   if (type === 'replay') {
-    const success = await handleRetryClick(item.sourceMessage.retryContent)
+    const success =
+      item.sourceMessage.status === 'interrupted'
+        ? await handleContinueClick(item.sourceMessage.id)
+        : await handleRetryClick(item.sourceMessage.retryContent)
     if (!success) {
-      MessagePlugin.warning('No retry content available for this message')
+      MessagePlugin.warning(
+        item.sourceMessage.status === 'interrupted'
+          ? '当前消息暂时无法继续生成'
+          : 'No retry content available for this message',
+      )
     }
   }
 }
 
 function handleStopClick() {
-  MessagePlugin.info('Stop is not wired yet')
+  const stopped = chatStore.stopStreamingMessage()
+  if (stopped) {
+    MessagePlugin.info('已停止生成，可稍后继续')
+  }
 }
 
 function openTitleDialog() {
@@ -563,8 +581,22 @@ async function confirmDeleteDialog() {
                 :class="{ 'chat-markdown--error': item.sourceMessage.status === 'error' }"
                 v-html="renderAssistantContent(content.data)"
               />
+              <div
+                v-if="item.sourceMessage.role === 'assistant' && item.sourceMessage.status === 'interrupted'"
+                class="chat-message__actions"
+              >
+                <t-button
+                  size="small"
+                  theme="primary"
+                  variant="text"
+                  :disabled="chatStore.isResponding"
+                  @click="handleContinueClick(item.sourceMessage.id)"
+                >
+                  继续生成
+                </t-button>
+              </div>
               <t-chat-content
-                v-else
+                v-if="item.sourceMessage.role !== 'assistant'"
                 :content="content"
                 :role="getContentRole(item)"
                 :status="item.sourceMessage.status === 'error' ? 'error' : ''"

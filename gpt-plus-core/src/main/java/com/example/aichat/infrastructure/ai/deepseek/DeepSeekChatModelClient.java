@@ -8,6 +8,7 @@ import com.example.aichat.infrastructure.ai.ChatModelMessage;
 import com.example.aichat.infrastructure.ai.ChatModelRequest;
 import com.example.aichat.infrastructure.ai.ChatModelResponse;
 import com.example.aichat.infrastructure.ai.ChatModelStreamChunk;
+import com.example.aichat.infrastructure.ai.ChatStreamInterruptedException;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -87,6 +88,8 @@ public class DeepSeekChatModelClient implements ChatModelClient {
             }
 
             return readStreamResponse(request, response, chunkConsumer);
+        } catch (ChatStreamInterruptedException exception) {
+            throw exception;
         } catch (ChatModelClientException exception) {
             throw exception;
         } catch (IOException exception) {
