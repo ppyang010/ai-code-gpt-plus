@@ -105,6 +105,25 @@ CREATE TABLE `chat_message` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='聊天消息表';
 
 
+CREATE TABLE `file_asset` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `user_id` BIGINT UNSIGNED NOT NULL COMMENT '上传用户ID',
+  `biz_type` VARCHAR(32) NOT NULL DEFAULT 'chat_image' COMMENT '业务类型: chat_image',
+  `file_name` VARCHAR(255) NOT NULL COMMENT '原始文件名',
+  `content_type` VARCHAR(64) NOT NULL COMMENT '文件MIME类型',
+  `file_size` BIGINT NOT NULL COMMENT '文件大小字节数',
+  `storage_path` VARCHAR(512) NOT NULL COMMENT '服务端存储路径',
+  `file_url` VARCHAR(512) DEFAULT NULL COMMENT '对外读取地址',
+  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '状态: 1正常 0删除',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_file_asset_user_id` (`user_id`),
+  KEY `idx_file_asset_biz_type` (`biz_type`),
+  KEY `idx_file_asset_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文件附件表';
+
+
 CREATE TABLE `api_call_log` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',

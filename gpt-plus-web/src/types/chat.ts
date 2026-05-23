@@ -4,6 +4,15 @@ export interface CommonResponse<T> {
   data: T
 }
 
+export interface FileAssetItem {
+  fileId: number
+  fileName: string
+  contentType: string
+  fileSize: number
+  fileUrl: string
+  thumbnailUrl?: string | null
+}
+
 export interface PageResponse<T> {
   list: T[]
   total: number
@@ -75,6 +84,7 @@ export interface ChatMessageItem {
   promptTokens: number
   completionTokens: number
   totalTokens: number
+  attachments?: FileAssetItem[]
   createdAt: string
 }
 
@@ -92,6 +102,7 @@ export interface ChatMessageSendRequest {
   modelId?: number | null
   modeCode?: 'quick' | 'expert'
   systemPrompt?: string | null
+  attachmentIds?: number[]
 }
 
 export interface ChatMessageRegenerateRequest {

@@ -13,8 +13,14 @@ public enum ErrorCode {
     CHAT_MESSAGE_NOT_FOUND(404, "消息不存在"),
     CHAT_MESSAGE_ALREADY_GENERATING(409, "当前消息正在生成中，请稍后再试"),
     CHAT_MESSAGE_NOT_INTERRUPTIBLE(409, "当前消息不支持继续生成"),
+    CHAT_ATTACHMENT_NOT_FOUND(404, "图片附件不存在或不可用"),
     CHAT_STREAM_ERROR(500, "流式输出异常"),
     CHAT_REGENERATE_NOT_IMPLEMENTED(501, "重新生成能力暂未接入"),
+    FILE_IMAGE_EMPTY(400, "请先选择要上传的图片"),
+    FILE_IMAGE_TOO_LARGE(400, "图片大小不能超过 5MB"),
+    FILE_IMAGE_TYPE_NOT_SUPPORTED(400, "仅支持上传 jpg、jpeg、png、webp 图片"),
+    FILE_ASSET_NOT_FOUND(404, "图片附件不存在"),
+    FILE_UPLOAD_FAILED(500, "图片上传失败，请稍后重试"),
     DEEPSEEK_API_KEY_NOT_CONFIGURED(503, "DeepSeek API Key 未配置"),
     INTERNAL_ERROR(500, "服务开小差了，请稍后重试");
 

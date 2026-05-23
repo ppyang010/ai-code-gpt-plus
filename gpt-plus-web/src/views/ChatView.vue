@@ -10,6 +10,7 @@ import { useChatStore } from '@/stores/chat'
 
 const chatStore = useChatStore()
 const draftMessage = ref('')
+const imageInputRef = ref<{ click: () => void } | null>(null)
 const messageComments = ref<Record<number, 'good' | 'bad' | ''>>({})
 const isTitleDialogVisible = ref(false)
 const titleDraft = ref('')
@@ -193,8 +194,8 @@ async function handleSendClick(value?: string) {
   await chatStore.sendMessage(content)
 }
 
-async function handleRetryClick(content?: string) {
-  const success = await chatStore.retryMessage(content)
+async function handleRetryClick(content?: string, attachments?: ChatMessage['retryAttachments']) {
+  const success = await chatStore.retryMessage(content, attachments || [])
   if (success) {
     draftMessage.value = ''
   }
@@ -387,7 +388,7 @@ async function handleMessageAction(type: string, item: { id: number; sourceMessa
     const success =
       item.sourceMessage.status === 'interrupted'
         ? await handleContinueClick(item.sourceMessage.id)
-        : await handleRetryClick(item.sourceMessage.retryContent)
+        : await handleRetryClick(item.sourceMessage.retryContent, item.sourceMessage.retryAttachments)
     if (!success) {
       MessagePlugin.warning(
         item.sourceMessage.status === 'interrupted'
@@ -461,6 +462,27 @@ async function confirmDeleteDialog() {
     MessagePlugin.success(chatStore.sessions.length > 0 ? `已删除「${deletedTitle}」` : '已删除当前会话，列表已清空')
     isDeleteDialogVisible.value = false
   }
+}
+
+function openImagePicker() {
+  imageInputRef.value?.click()
+}
+
+async function handleImageSelected(event: Event) {
+  const input = event.target as { files?: unknown[] | null; value?: string } | null
+  const selectedFiles = Array.from(input?.files || [])
+
+  for (const file of selectedFiles) {
+    await chatStore.uploadImage(file as never)
+  }
+
+  if (input) {
+    input.value = ''
+  }
+}
+
+function removePendingAttachment(fileId: number) {
+  chatStore.removePendingAttachment(fileId)
 }
 </script>
 
@@ -581,6 +603,23 @@ async function confirmDeleteDialog() {
                 :class="{ 'chat-markdown--error': item.sourceMessage.status === 'error' }"
                 v-html="renderAssistantContent(content.data)"
               />
+              <div v-if="item.sourceMessage.attachments?.length" class="chat-attachment-grid">
+                <a
+                  v-for="attachment in item.sourceMessage.attachments"
+                  :key="attachment.fileId"
+                  class="chat-attachment-card"
+                  :href="attachment.fileUrl"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <img
+                    class="chat-attachment-card__image"
+                    :src="attachment.thumbnailUrl || attachment.fileUrl"
+                    :alt="attachment.fileName"
+                  />
+                  <div class="chat-attachment-card__name">{{ attachment.fileName }}</div>
+                </a>
+              </div>
               <div
                 v-if="item.sourceMessage.role === 'assistant' && item.sourceMessage.status === 'interrupted'"
                 class="chat-message__actions"
@@ -596,7 +635,7 @@ async function confirmDeleteDialog() {
                 </t-button>
               </div>
               <t-chat-content
-                v-if="item.sourceMessage.role !== 'assistant'"
+                v-if="item.sourceMessage.role !== 'assistant' && item.sourceMessage.content"
                 :content="content"
                 :role="getContentRole(item)"
                 :status="item.sourceMessage.status === 'error' ? 'error' : ''"
@@ -631,6 +670,27 @@ async function confirmDeleteDialog() {
           @close="chatStore.clearErrorMessage"
         />
 
+        <div v-if="chatStore.pendingAttachments.length > 0" class="composer__attachments">
+          <div
+            v-for="attachment in chatStore.pendingAttachments"
+            :key="attachment.fileId"
+            class="composer-attachment"
+          >
+            <img
+              class="composer-attachment__image"
+              :src="attachment.thumbnailUrl || attachment.fileUrl"
+              :alt="attachment.fileName"
+            />
+            <div class="composer-attachment__meta">
+              <div class="composer-attachment__name">{{ attachment.fileName }}</div>
+              <div class="composer-attachment__size">{{ Math.max(1, Math.round(attachment.fileSize / 1024)) }} KB</div>
+            </div>
+            <button class="composer-attachment__remove" type="button" @click="removePendingAttachment(attachment.fileId)">
+              移除
+            </button>
+          </div>
+        </div>
+
         <t-chat-sender
           v-model="draftMessage"
           class="composer__sender"
@@ -644,13 +704,41 @@ async function confirmDeleteDialog() {
           @stop="handleStopClick"
         >
           <template #footer-prefix>
+            <button
+              type="button"
+              class="composer__upload-button"
+              :disabled="chatStore.isResponding || chatStore.isImageUploading"
+              @click="openImagePicker"
+            >
+              {{ chatStore.isImageUploading ? '上传中...' : '添加图片' }}
+            </button>
             <span class="composer__hint">Ready</span>
           </template>
 
           <template #suffix>
-            <span class="composer__mode">mode: {{ chatStore.currentMode }}</span>
+            <div class="composer__suffix-actions">
+              <t-button
+                v-if="chatStore.isResponding"
+                size="small"
+                theme="danger"
+                variant="outline"
+                @click="handleStopClick"
+              >
+                停止生成
+              </t-button>
+              <span class="composer__mode">mode: {{ chatStore.currentMode }}</span>
+            </div>
           </template>
         </t-chat-sender>
+
+        <input
+          ref="imageInputRef"
+          class="composer__image-input"
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          multiple
+          @change="handleImageSelected"
+        />
       </footer>
     </main>
 

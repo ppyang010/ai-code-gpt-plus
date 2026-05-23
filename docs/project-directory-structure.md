@@ -1,6 +1,6 @@
 # GPT Plus 项目目录结构说明
 
-最后更新：2026-05-19
+最后更新：2026-05-22
 
 ## 目的
 
@@ -72,7 +72,8 @@ com/example/aichat/
 | `infrastructure/ai/` | 模型调用抽象层，定义统一请求、响应、流式 chunk、客户端接口和客户端注册表。 |
 | `infrastructure/ai/deepseek/` | DeepSeek 真实模型调用适配。 |
 | `infrastructure/ai/mock/` | 本地开发兜底的 mock 模型适配。 |
-| `modules/chat/` | 聊天核心业务，包含会话、消息、发送消息、SSE 流式输出和提示词解析。 |
+| `modules/chat/` | 聊天核心业务，包含会话、消息、发送消息、SSE 流式输出、附件引用和提示词解析。 |
+| `modules/file/` | 图片附件模块，包含直传图片、文件元数据落库和图片内容读取。 |
 | `modules/model/` | 模型配置业务，包含模型供应商、模型列表、模型能力字段和调用日志。 |
 | `modules/user/` | 用户基础数据模块。 |
 | `modules/billing/` | 计费和用量预留模块，包含余额和 token 使用记录。 |
@@ -191,7 +192,7 @@ docs/
 | 目录/文件 | 作用 |
 | --- | --- |
 | `project-directory-structure.md` | 当前文档，说明仓库目录职责和新增文件放置规则。 |
-| `backend/` | 后端任务、启动、接口 DTO、实体 Mapper、API 用例和执行结果文档。 |
+| `backend/` | 后端任务、启动、接口 DTO、实体 Mapper、附件上传、API 用例和执行结果文档。 |
 | `db/` | 数据库建表 SQL 和表关系说明。 |
 | `frontend/` | 前端任务、技术栈、本地启动流程文档。 |
 | `rules/` | 项目执行规则和 API 测试规则。 |

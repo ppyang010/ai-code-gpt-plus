@@ -1,6 +1,10 @@
 spring:
   application:
     name: gpt-plus-core
+  servlet:
+    multipart:
+      max-file-size: 6MB
+      max-request-size: 6MB
   datasource:
     url: jdbc:mysql://127.0.0.1:3306/mysql?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
     username: root
@@ -26,3 +30,9 @@ ai:
     base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
     api-key: ${DEEPSEEK_API_KEY:}
     default-model: ${DEEPSEEK_DEFAULT_MODEL:deepseek-v4-flash}
+
+app:
+  file:
+    upload-root: ${FILE_UPLOAD_ROOT:${user.dir}/.local-storage/files}
+    public-base-path: ${FILE_PUBLIC_BASE_PATH:/api/file/content}
+    max-image-size-bytes: ${FILE_MAX_IMAGE_SIZE_BYTES:5242880}

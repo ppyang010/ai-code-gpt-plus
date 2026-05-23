@@ -24,6 +24,7 @@ import type {
   ChatStreamEndEvent,
   ChatStreamErrorEvent,
   ChatStreamStartEvent,
+  FileAssetItem,
   PageResponse,
 } from '@/types/chat'
 
@@ -44,7 +45,9 @@ export interface ChatMessage {
   modelName?: string | null
   createdAt: string
   status?: 'streaming' | 'done' | 'error' | 'interrupted'
+  attachments?: FileAssetItem[]
   retryContent?: string
+  retryAttachments?: FileAssetItem[]
 }
 
 const EMPTY_SESSION_TITLE = '新会话'
@@ -95,7 +98,7 @@ function normalizeMessageStatus(status: number): ChatMessage['status'] {
   }
 }
 
-function normalizeMessage(message: ChatMessageItem, retryContent?: string): ChatMessage {
+function normalizeMessage(message: ChatMessageItem, retryContent?: string, retryAttachments?: FileAssetItem[]): ChatMessage {
   return {
     id: message.messageId,
     role: message.role,
@@ -103,7 +106,9 @@ function normalizeMessage(message: ChatMessageItem, retryContent?: string): Chat
     modelName: message.modelName,
     createdAt: formatRelativeTime(message.createdAt),
     status: normalizeMessageStatus(message.status),
+    attachments: message.attachments || [],
     retryContent,
+    retryAttachments,
   }
 }
 
@@ -127,6 +132,8 @@ export const useChatStore = defineStore('chat', () => {
   const availableModels = ref<ChatModelOption[]>([...FALLBACK_CHAT_MODEL_OPTIONS])
   const currentSessionTitle = ref(EMPTY_SESSION_TITLE)
   const lastRetryContent = ref('')
+  const pendingAttachments = ref<FileAssetItem[]>([])
+  const isImageUploading = ref(false)
   let activeStreamAbortController: AbortController | null = null
   let activeStreamSessionId: number | null = null
   let activeStreamMessageId: number | null = null
@@ -201,11 +208,14 @@ export const useChatStore = defineStore('chat', () => {
       })
 
       let lastUserContent = ''
+      let lastUserAttachments: FileAssetItem[] = []
       messages.value = response.messageList.map((message) => {
         const retryContent = message.role === 'assistant' ? lastUserContent : message.content
-        const normalizedMessage = normalizeMessage(message, retryContent)
+        const retryAttachments = message.role === 'assistant' ? lastUserAttachments : message.attachments || []
+        const normalizedMessage = normalizeMessage(message, retryContent, retryAttachments)
         if (message.role === 'user') {
           lastUserContent = message.content
+          lastUserAttachments = message.attachments || []
         }
         return normalizedMessage
       })
@@ -368,6 +378,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionId: number
     fallbackAssistantId?: number | null
     retryContent?: string
+    retryAttachments?: FileAssetItem[]
   }) {
     isResponding.value = true
     errorMessage.value = ''
@@ -458,6 +469,7 @@ export const useChatStore = defineStore('chat', () => {
             createdAt: 'error',
             status: 'error',
             retryContent: options.retryContent,
+            retryAttachments: options.retryAttachments || [],
           },
         ]
       }
@@ -474,7 +486,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, attachments: FileAssetItem[] = pendingAttachments.value.slice()) {
     const trimmed = content.trim()
     if (!trimmed || isResponding.value) {
       return false
@@ -490,6 +502,8 @@ export const useChatStore = defineStore('chat', () => {
 
     const userMessageId = Date.now()
     const fallbackAssistantId = userMessageId + 1
+    const attachmentIds = attachments.map((attachment) => attachment.fileId)
+    pendingAttachments.value = []
 
     // 先乐观插入用户消息，保证按下发送后页面立即反馈，不等待后端 SSE 首包。
     messages.value = [
@@ -500,7 +514,9 @@ export const useChatStore = defineStore('chat', () => {
         content: trimmed,
         createdAt: 'just now',
         status: 'done',
+        attachments,
         retryContent: trimmed,
+        retryAttachments: attachments,
       },
     ]
 
@@ -512,6 +528,7 @@ export const useChatStore = defineStore('chat', () => {
         findChatModelByCode(availableModels.value, currentModel.value)?.id ??
         activeSession.value?.defaultModelId ??
         DEFAULT_CHAT_MODEL.id,
+      attachmentIds,
     }
 
     return streamAssistantResponse({
@@ -520,6 +537,7 @@ export const useChatStore = defineStore('chat', () => {
       sessionId,
       fallbackAssistantId,
       retryContent: trimmed,
+      retryAttachments: attachments,
     })
   }
 
@@ -548,13 +566,35 @@ export const useChatStore = defineStore('chat', () => {
     })
   }
 
-  async function retryMessage(content?: string) {
+  async function retryMessage(content?: string, attachments?: FileAssetItem[]) {
     const nextContent = (content || lastRetryContent.value).trim()
     if (!nextContent) {
       return false
     }
 
-    return sendMessage(nextContent)
+    return sendMessage(nextContent, attachments || [])
+  }
+
+  async function uploadImage(file: File) {
+    isImageUploading.value = true
+    errorMessage.value = ''
+
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const uploaded = await http.upload<FileAssetItem>('/file/upload/image', formData)
+      pendingAttachments.value = [...pendingAttachments.value, uploaded]
+      return uploaded
+    } catch (error) {
+      errorMessage.value = formatErrorMessage(error, '图片上传失败')
+      return null
+    } finally {
+      isImageUploading.value = false
+    }
+  }
+
+  function removePendingAttachment(fileId: number) {
+    pendingAttachments.value = pendingAttachments.value.filter((attachment) => attachment.fileId !== fileId)
   }
 
   function stopStreamingMessage() {
@@ -678,8 +718,12 @@ export const useChatStore = defineStore('chat', () => {
     loadModels,
     loadSessions,
     messages,
+    pendingAttachments,
+    isImageUploading,
     continueMessage,
     retryMessage,
+    uploadImage,
+    removePendingAttachment,
     sessionActionSessionId,
     selectSession,
     stopStreamingMessage,

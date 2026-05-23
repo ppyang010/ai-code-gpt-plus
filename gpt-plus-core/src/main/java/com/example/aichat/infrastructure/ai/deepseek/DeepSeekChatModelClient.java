@@ -221,8 +221,8 @@ public class DeepSeekChatModelClient implements ChatModelClient {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> castMap(Object value) {
-        if (value instanceof Map<?, ?> map) {
-            return (Map<String, Object>) map;
+        if (value instanceof Map<?, ?>) {
+            return (Map<String, Object>) value;
         }
         return null;
     }
@@ -236,8 +236,8 @@ public class DeepSeekChatModelClient implements ChatModelClient {
             return 0;
         }
         Object value = usage.get(key);
-        if (value instanceof Number number) {
-            return number.intValue();
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
         }
         return Integer.parseInt(String.valueOf(value));
     }

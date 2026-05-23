@@ -29,6 +29,8 @@ import com.example.aichat.modules.chat.service.ChatMessageService;
 import com.example.aichat.modules.chat.service.ChatPromptResolver;
 import com.example.aichat.modules.chat.vo.ChatMessageItemVO;
 import com.example.aichat.modules.chat.vo.ChatMessageListVO;
+import com.example.aichat.modules.file.service.FileAssetService;
+import com.example.aichat.modules.file.vo.FileAssetItemVO;
 import com.example.aichat.modules.model.entity.ApiCallLogDO;
 import com.example.aichat.modules.model.entity.ModelConfigDO;
 import com.example.aichat.modules.model.mapper.ApiCallLogMapper;
@@ -49,6 +51,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 @Service
@@ -65,6 +68,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private final ChatSessionMapper chatSessionMapper;
     private final ChatMessageMapper chatMessageMapper;
     private final ModelConfigMapper modelConfigMapper;
+    private final FileAssetService fileAssetService;
     private final ChatModelClientRegistry chatModelClientRegistry;
     private final ApiCallLogMapper apiCallLogMapper;
     private final UserTokenUsageMapper userTokenUsageMapper;
@@ -76,6 +80,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             ChatSessionMapper chatSessionMapper,
             ChatMessageMapper chatMessageMapper,
             ModelConfigMapper modelConfigMapper,
+            FileAssetService fileAssetService,
             ChatModelClientRegistry chatModelClientRegistry,
             ApiCallLogMapper apiCallLogMapper,
             UserTokenUsageMapper userTokenUsageMapper,
@@ -86,6 +91,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         this.chatSessionMapper = chatSessionMapper;
         this.chatMessageMapper = chatMessageMapper;
         this.modelConfigMapper = modelConfigMapper;
+        this.fileAssetService = fileAssetService;
         this.chatModelClientRegistry = chatModelClientRegistry;
         this.apiCallLogMapper = apiCallLogMapper;
         this.userTokenUsageMapper = userTokenUsageMapper;
@@ -135,6 +141,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         ChatSessionDO session = getActiveSession(userId, request.getSessionId());
         // 优先使用本次请求指定的模型；未指定时回落到会话默认模型，再由 resolveModel 做全局默认兜底。
         ModelConfigDO model = resolveModel(session, request.getModelId());
+        List<FileAssetItemVO> attachments = fileAssetService.requireOwnedCompletedAssets(userId, request.getAttachmentIds());
 
         // 本次请求的系统提示词由模式、会话和请求三层合并，保证模式切换能影响同一会话内的回答策略。
         String finalPrompt = chatPromptResolver.resolveSystemPrompt(
@@ -149,7 +156,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
         // seq_no 采用同一会话内递增序号：用户消息占当前序号，assistant 回答占下一个序号。
         int nextSeqNo = nextSeqNo(session.getId());
-        ChatMessageDO userMessage = buildUserMessage(userId, session.getId(), request.getContent(), nextSeqNo);
+        ChatMessageDO userMessage = buildUserMessage(userId, session.getId(), request.getContent(), attachments, nextSeqNo);
         // 用户消息先落库，保证即使后续模型调用失败，历史里也能保留用户实际发出的内容。
         chatMessageMapper.insert(userMessage);
         // 更新会话最后活跃时间，列表页可以立刻按最新发送行为排序。
@@ -383,7 +390,13 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         return current == null ? 1 : current + 1;
     }
 
-    private ChatMessageDO buildUserMessage(Long userId, Long sessionId, String content, int seqNo) {
+    private ChatMessageDO buildUserMessage(
+            Long userId,
+            Long sessionId,
+            String content,
+            List<FileAssetItemVO> attachments,
+            int seqNo
+    ) {
         ChatMessageDO entity = new ChatMessageDO();
         entity.setUserId(userId);
         entity.setSessionId(sessionId);
@@ -395,6 +408,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         entity.setPromptTokens(0);
         entity.setCompletionTokens(0);
         entity.setTotalTokens(0);
+        entity.setMetadata(buildUserMessageMetadata(attachments));
         return entity;
     }
 
@@ -762,18 +776,18 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     }
 
     private Integer resolveHttpStatus(Exception exception) {
-        if (exception instanceof ChatModelClientException modelClientException) {
-            return modelClientException.getHttpStatus();
+        if (exception instanceof ChatModelClientException) {
+            return ((ChatModelClientException) exception).getHttpStatus();
         }
         return null;
     }
 
     private String resolveErrorCode(Exception exception) {
-        if (exception instanceof ChatModelClientException modelClientException) {
-            return modelClientException.getErrorCode();
+        if (exception instanceof ChatModelClientException) {
+            return ((ChatModelClientException) exception).getErrorCode();
         }
-        if (exception instanceof BizException bizException) {
-            return bizException.getMessage();
+        if (exception instanceof BizException) {
+            return ((BizException) exception).getMessage();
         }
         return "CHAT_STREAM_ERROR";
     }
@@ -783,8 +797,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     }
 
     private String resolveFailureResponsePayload(Exception exception) {
-        if (exception instanceof ChatModelClientException modelClientException) {
-            String responsePayload = truncate(modelClientException.getResponsePayload(), 1000);
+        if (exception instanceof ChatModelClientException) {
+            String responsePayload = truncate(((ChatModelClientException) exception).getResponsePayload(), 1000);
             if (!StringUtils.hasText(responsePayload)) {
                 return null;
             }
@@ -836,6 +850,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         item.setPromptTokens(message.getPromptTokens());
         item.setCompletionTokens(message.getCompletionTokens());
         item.setTotalTokens(message.getTotalTokens());
+        item.setAttachments(parseMessageAttachments(message.getMetadata()));
         item.setCreatedAt(message.getCreatedAt());
 
         if (message.getModelId() != null) {
@@ -846,5 +861,32 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             }
         }
         return item;
+    }
+
+    private String buildUserMessageMetadata(List<FileAssetItemVO> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return null;
+        }
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("attachments", attachments);
+        return toJsonSafely(metadata);
+    }
+
+    private List<FileAssetItemVO> parseMessageAttachments(String metadata) {
+        if (!StringUtils.hasText(metadata)) {
+            return List.of();
+        }
+        try {
+            Map<String, Object> payload = objectMapper.readValue(metadata, new TypeReference<>() {});
+            Object attachments = payload.get("attachments");
+            if (attachments == null) {
+                return List.of();
+            }
+            return objectMapper.convertValue(attachments, new TypeReference<List<FileAssetItemVO>>() {});
+        } catch (Exception exception) {
+            log.warn("Failed to parse chat message attachments metadata", exception);
+            return List.of();
+        }
     }
 }

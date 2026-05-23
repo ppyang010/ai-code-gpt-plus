@@ -230,16 +230,125 @@ textarea {
   margin-bottom: 12px;
 }
 
+.composer__attachments {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.composer-attachment {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #dcdfe6;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.composer-attachment__image {
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #f2f3f5;
+}
+
+.composer-attachment__meta {
+  min-width: 0;
+}
+
+.composer-attachment__name {
+  color: #1f2329;
+  font-size: 0.92rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment__size {
+  margin-top: 4px;
+  color: #86909c;
+  font-size: 0.8rem;
+}
+
+.composer-attachment__remove {
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: #f2f3f5;
+  color: #4f5969;
+  cursor: pointer;
+}
+
+.composer__image-input {
+  display: none;
+}
+
 .composer__sender {
   border-radius: 8px;
   background: #ffffff;
   border: 1px solid #dcdfe6;
 }
 
+.composer__upload-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: #e8f3ff;
+  color: #0052d9;
+  cursor: pointer;
+}
+
+.composer__upload-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
 .composer__hint,
 .composer__mode {
   color: #86909c;
   font-size: 0.86rem;
+}
+
+.composer__suffix-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-attachment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 180px));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.chat-attachment-card {
+  display: block;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid #dcdfe6;
+  background: #ffffff;
+  text-decoration: none;
+}
+
+.chat-attachment-card__image {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #f2f3f5;
+}
+
+.chat-attachment-card__name {
+  margin-top: 8px;
+  color: #1f2329;
+  font-size: 0.82rem;
+  word-break: break-all;
 }
 
 .chat-markdown {

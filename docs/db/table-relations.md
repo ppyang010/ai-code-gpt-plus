@@ -145,12 +145,15 @@
 - `api_call_log`
 - `model_config`
 
-## 后续可扩展表
+## 当前已接入与后续可扩展表
+
+当前已接入：
+
+- `file_asset`：聊天图片附件上传、预览和消息引用
 
 后续如果要继续迭代，建议补充这些表：
 
 - `prompt_template`：快速模式、专家模式提示词模板
-- `file_asset`：附件上传和解析
 - `login_log`：登录日志
 - `recharge_order`：充值订单
 - `admin_user`：后台管理用户

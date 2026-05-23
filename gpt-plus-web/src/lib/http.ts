@@ -32,13 +32,15 @@ function buildUrl(path: string, query?: Record<string, QueryValue>) {
 }
 
 async function request<T>(path: string, init?: RequestInit, query?: Record<string, QueryValue>) {
+  const headers = new Headers(init?.headers ?? {})
+  headers.set('X-User-Id', userIdHeaderValue)
+  if (!(init?.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+
   const response = await fetch(buildUrl(path, query), {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-Id': userIdHeaderValue,
-      ...(init?.headers ?? {}),
-    },
+    headers,
   })
 
   if (!response.ok) {
@@ -157,6 +159,12 @@ export const http = {
     return request<T>(path, {
       method: 'POST',
       body: body === undefined ? undefined : JSON.stringify(body),
+    })
+  },
+  upload<T>(path: string, formData: FormData) {
+    return request<T>(path, {
+      method: 'POST',
+      body: formData,
     })
   },
   stream,

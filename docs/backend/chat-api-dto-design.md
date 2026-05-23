@@ -35,7 +35,8 @@
 
 补充说明：
 
-- 图片上传和聊天响应中断后继续已经纳入当前需求范围，但当前仓库仍处于文档设计阶段，尚未进入代码实现。
+- 图片上传当前已收敛为非断点续传直传版本，并已接入 `attachmentIds` 关联聊天消息
+- 聊天响应中断后继续当前已进入代码实现并完成本地联调验证
 
 ## 模式设计
 
@@ -187,10 +188,8 @@ yyyy-MM-dd HH:mm:ss
 7. `POST /api/chat/message/regenerate` 重新生成回答
 8. `GET /api/model/list` 获取启用模型列表
 9. `GET /api/health` 健康检查
-10. `POST /api/file/upload/init` 初始化上传任务
-11. `POST /api/file/upload/chunk` 上传文件分片
-12. `POST /api/file/upload/complete` 合并上传分片并生成附件
-13. `GET /api/file/upload/status` 查询上传状态
+10. `POST /api/file/upload/image` 直传图片并生成附件
+11. `GET /api/file/content/{fileId}` 读取图片内容
 
 如果你想让“发消息”也走普通接口，后面可以再加：
 
@@ -570,51 +569,18 @@ Accept: text/event-stream
 - 支持聊天输入区上传图片
 - 支持后续扩展普通文件上传
 - 上传完成后返回 `fileId`，供 `/api/chat/message/send` 通过 `attachmentIds` 引用
+- 第一版实现收敛为单接口非断点续传上传，不再维护 `init/chunk/complete` 分片协议
 
 ### 上传范围建议
 
 - 图片优先支持：`jpg`、`jpeg`、`png`、`webp`
-- 单文件大小、分片大小、总分片数由服务端统一限制
+- 单文件大小由服务端统一限制，当前建议 `<= 5MB`
 - 发送聊天消息时，仅允许引用当前用户已上传完成的附件
 
-### 7.1 初始化上传任务
+### 7.1 直传图片
 
 ```http
-POST /api/file/upload/init
-Content-Type: application/json
-```
-
-```json
-{
-  "fileName": "diagram.png",
-  "fileSize": 5242880,
-  "contentType": "image/png",
-  "fileMd5": "5d41402abc4b2a76b9719d911017c592",
-  "chunkSize": 1048576,
-  "totalChunks": 5
-}
-```
-
-响应建议：
-
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "uploadId": "upload_20260519_001",
-    "fileId": 3001,
-    "chunkSize": 1048576,
-    "totalChunks": 5,
-    "uploadedChunks": []
-  }
-}
-```
-
-### 7.2 上传文件分片
-
-```http
-POST /api/file/upload/chunk
+POST /api/file/upload/image
 Content-Type: multipart/form-data
 ```
 
@@ -622,24 +588,7 @@ Content-Type: multipart/form-data
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---:|---|
-| uploadId | String | 是 | 上传任务 ID |
-| chunkIndex | Integer | 是 | 分片下标，从 `0` 开始 |
-| totalChunks | Integer | 是 | 总分片数 |
-| chunkMd5 | String | 否 | 当前分片摘要，便于校验 |
-| file | Binary | 是 | 当前分片内容 |
-
-### 7.3 完成上传
-
-```http
-POST /api/file/upload/complete
-Content-Type: application/json
-```
-
-```json
-{
-  "uploadId": "upload_20260519_001"
-}
-```
+| file | Binary | 是 | 单张图片文件 |
 
 响应建议：
 
@@ -651,35 +600,24 @@ Content-Type: application/json
     "fileId": 3001,
     "fileName": "diagram.png",
     "contentType": "image/png",
-    "fileUrl": "https://static.example.com/chat/diagram.png",
-    "thumbnailUrl": "https://static.example.com/chat/diagram-thumb.png"
+    "fileSize": 5242880,
+    "fileUrl": "/api/file/content/3001",
+    "thumbnailUrl": "/api/file/content/3001"
   }
 }
 ```
 
-### 7.4 查询上传状态
+### 7.2 读取图片内容
 
 ```http
-GET /api/file/upload/status?uploadId=upload_20260519_001
+GET /api/file/content/{fileId}
 ```
 
-响应建议：
+说明：
 
-```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "uploadId": "upload_20260519_001",
-    "fileId": 3001,
-    "status": "UPLOADING",
-    "uploadedChunks": [0, 1, 2],
-    "totalChunks": 5
-  }
-}
-```
-
-状态查询主要用于上传进度回显、失败重试和服务端排查，不再承担图片断点续传语义。
+- 当前通过后端读取本地已保存图片，用于聊天输入区预览和消息区回显
+- 当前项目还未接入登录态，因此读取接口默认不做额外鉴权
+- 等登录鉴权接入后，再把读取权限收敛到真实用户会话
 
 ---
 
@@ -1293,11 +1231,9 @@ chat:
 4. `POST /message/send` + SSE
 5. `POST /session/update-title`
 6. `POST /session/delete`
-7. `POST /file/upload/init`
-8. `POST /file/upload/chunk`
-9. `POST /file/upload/complete`
-10. `GET /file/upload/status`
-11. `POST /message/regenerate`
+7. `POST /file/upload/image`
+8. `GET /file/content/{fileId}`
+9. `POST /message/regenerate`
 
 最先打通的主链路应该是：
 
@@ -1314,7 +1250,7 @@ chat:
 
 - “发消息”优先做成一个流式接口，而不是同步接口
 - `DTO / VO` 保持够用，不提前过度抽象
-- 图片上传和聊天响应中断后继续进入需求设计范围，但实现仍按独立能力推进
+- 图片上传和聊天响应中断后继续都已进入实现阶段，但仍按独立能力迭代和验证
 - 其他多模态、搜索先预留字段，不进入主流程
 - 会话删除按逻辑删除考虑
 - 重新生成能力保留单独接口，也可后续合并

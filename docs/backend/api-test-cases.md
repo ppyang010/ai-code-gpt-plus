@@ -1,6 +1,6 @@
 # 后端接口测试用例
 
-最后更新：2026-05-20
+最后更新：2026-05-22
 
 ## 说明
 
@@ -305,7 +305,51 @@ curl -s -X POST "http://127.0.0.1:8080/api/chat/session/delete" \
 
 - 数据库中 `chat_session.status` 被更新为逻辑删除状态
 
-### 10. 中断后继续生成
+### 10. 图片直传上传与附件发送
+
+#### 测试目标
+
+- 验证 `POST /api/file/upload/image` 可直接上传图片并返回附件信息
+- 验证 `attachmentIds` 可随 `POST /api/chat/message/send` 一起提交
+- 验证消息列表中的 user message 会回显附件元数据
+
+#### 上传图片请求
+
+```bash
+curl -s -X POST "http://127.0.0.1:8080/api/file/upload/image" \
+  -H "X-User-Id: 1" \
+  -F "file=@/private/tmp/gpt-plus-upload-test.png;type=image/png"
+```
+
+#### 预期
+
+- 返回 `code = 0`
+- 返回 `fileId`、`fileName`、`contentType`、`fileSize`
+- 返回可直接预览的 `fileUrl`
+
+#### 带附件发送消息
+
+```bash
+curl -N -X POST "http://127.0.0.1:8080/api/chat/message/send" \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: 1" \
+  -d '{
+    "sessionId": 1,
+    "modelId": 1,
+    "content": "这是一条带图片附件的测试消息，请简单回复已收到。",
+    "modeCode": "quick",
+    "attachmentIds": [1]
+  }'
+```
+
+#### 联调检查点
+
+- 返回 `text/event-stream`
+- `message_start -> message_delta -> message_end` 顺序正常
+- `chat_message.metadata` 中存在附件信息
+- `GET /api/chat/message/list` 返回的 user message 包含 `attachments`
+
+### 11. 中断后继续生成
 
 #### 测试目标
 
