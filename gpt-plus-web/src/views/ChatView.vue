@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { AddIcon, DeleteIcon, EditIcon } from 'tdesign-icons-vue-next'
+import { AddIcon, DeleteIcon, EditIcon, SearchIcon } from 'tdesign-icons-vue-next'
 import hljs from 'highlight.js'
 import MarkdownIt from 'markdown-it'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import type { ChatMessage } from '@/stores/chat'
+import type { ChatMessage, SessionPreview } from '@/stores/chat'
 import { useChatStore } from '@/stores/chat'
 
 const chatStore = useChatStore()
@@ -15,6 +15,7 @@ const messageComments = ref<Record<number, 'good' | 'bad' | ''>>({})
 const isTitleDialogVisible = ref(false)
 const titleDraft = ref('')
 const isDeleteDialogVisible = ref(false)
+const targetSessionId = ref<number | null>(null)
 const messagePanelRef = ref<HTMLElement | null>(null)
 const isNearMessageBottom = ref(true)
 const hasScrolledForCurrentSession = ref(false)
@@ -23,16 +24,48 @@ let messageScrollContainer: HTMLElement | null = null
 let messageScrollFrame = 0
 
 const sessionCountText = computed(() => `${chatStore.sessions.length} sessions`)
+const sessionPageText = computed(() => `Page ${chatStore.sessionPageNo}`)
 const canSend = computed(() => draftMessage.value.trim().length > 0 && !chatStore.isResponding)
-const canManageCurrentSession = computed(() => Boolean(chatStore.activeSession))
-const isSessionActionDisabled = computed(
-  () =>
-    !chatStore.activeSession ||
-    chatStore.isMessagesLoading ||
-    chatStore.isSessionsLoading ||
-    chatStore.isResponding ||
-    chatStore.isCreatingSession,
-)
+const targetSession = computed(() => chatStore.sessions.find((session) => session.id === targetSessionId.value) ?? null)
+const groupedSessions = computed(() => {
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const oneDayMs = 24 * 60 * 60 * 1000
+  const groups = {
+    today: [] as SessionPreview[],
+    yesterday: [] as SessionPreview[],
+    week: [] as SessionPreview[],
+    earlier: [] as SessionPreview[],
+  }
+
+  for (const session of chatStore.sessions) {
+    const timestamp = new Date(session.updatedAtRaw).getTime()
+    if (Number.isNaN(timestamp)) {
+      groups.earlier.push(session)
+      continue
+    }
+
+    const sessionDay = new Date(new Date(timestamp).getFullYear(), new Date(timestamp).getMonth(), new Date(timestamp).getDate()).getTime()
+    const diff = startOfToday - sessionDay
+
+    if (diff <= 0) {
+      groups.today.push(session)
+    } else if (diff <= oneDayMs) {
+      groups.yesterday.push(session)
+    } else if (diff <= oneDayMs * 7) {
+      groups.week.push(session)
+    } else {
+      groups.earlier.push(session)
+    }
+  }
+
+  return [
+    { label: '今天', items: groups.today },
+    { label: '昨天', items: groups.yesterday },
+    { label: '7 天内', items: groups.week },
+    { label: '更早', items: groups.earlier },
+  ].filter((group) => group.items.length > 0)
+})
 const modeOptions = [
   { label: 'Quick Mode', value: 'quick' },
   { label: 'Expert Mode', value: 'expert' },
@@ -406,12 +439,24 @@ function handleStopClick() {
   }
 }
 
-function openTitleDialog() {
-  if (!chatStore.activeSession) {
+function isSessionActionDisabled(sessionId: number) {
+  return (
+    chatStore.isMessagesLoading ||
+    chatStore.isSessionsLoading ||
+    chatStore.isResponding ||
+    chatStore.isCreatingSession ||
+    (chatStore.sessionActionSessionId === sessionId && (chatStore.isUpdatingSessionTitle || chatStore.isDeletingSession))
+  )
+}
+
+function openTitleDialog(sessionId: number) {
+  const session = chatStore.sessions.find((item) => item.id === sessionId)
+  if (!session) {
     return
   }
 
-  titleDraft.value = chatStore.activeSession.title
+  targetSessionId.value = sessionId
+  titleDraft.value = session.title
   isTitleDialogVisible.value = true
 }
 
@@ -424,22 +469,25 @@ function closeTitleDialog() {
 }
 
 async function confirmTitleDialog() {
-  if (!chatStore.activeSession) {
+  if (!targetSession.value) {
     return
   }
 
-  const success = await chatStore.updateSessionTitle(chatStore.activeSession.id, titleDraft.value)
+  const success = await chatStore.updateSessionTitle(targetSession.value.id, titleDraft.value)
   if (success) {
     MessagePlugin.success('会话标题已更新')
     isTitleDialogVisible.value = false
+    targetSessionId.value = null
   }
 }
 
-function openDeleteDialog() {
-  if (!chatStore.activeSession) {
+function openDeleteDialog(sessionId: number) {
+  const session = chatStore.sessions.find((item) => item.id === sessionId)
+  if (!session) {
     return
   }
 
+  targetSessionId.value = sessionId
   isDeleteDialogVisible.value = true
 }
 
@@ -452,15 +500,16 @@ function closeDeleteDialog() {
 }
 
 async function confirmDeleteDialog() {
-  if (!chatStore.activeSession) {
+  if (!targetSession.value) {
     return
   }
 
-  const deletedTitle = chatStore.activeSession.title
-  const success = await chatStore.deleteSession(chatStore.activeSession.id)
+  const deletedTitle = targetSession.value.title
+  const success = await chatStore.deleteSession(targetSession.value.id)
   if (success) {
     MessagePlugin.success(chatStore.sessions.length > 0 ? `已删除「${deletedTitle}」` : '已删除当前会话，列表已清空')
     isDeleteDialogVisible.value = false
+    targetSessionId.value = null
   }
 }
 
@@ -490,50 +539,100 @@ function removePendingAttachment(fileId: number) {
   <div class="chat-page">
     <aside class="chat-sidebar">
       <div class="chat-sidebar__brand">
-        <div class="chat-sidebar__badge">GPT+</div>
-        <div>
-          <div class="chat-sidebar__title">GPT Plus</div>
-          <div class="chat-sidebar__subtitle">Multi-model workspace</div>
+        <div class="chat-sidebar__brand-main">
+          <div class="chat-sidebar__badge">GPT+</div>
+          <div>
+            <div class="chat-sidebar__title">GPT Plus</div>
+            <div class="chat-sidebar__subtitle">Multi-model workspace</div>
+          </div>
         </div>
+        <button class="chat-sidebar__toolbar-button" type="button" aria-label="search sessions">
+          <SearchIcon />
+        </button>
       </div>
 
       <t-button
         class="chat-sidebar__new"
         theme="primary"
         size="large"
-        shape="round"
-        block
         :loading="chatStore.isCreatingSession"
         @click="chatStore.createSession"
       >
-        <template #icon><AddIcon /></template>
-        New Chat
+        <div class="chat-sidebar__new-content">
+          <span class="chat-sidebar__new-icon">
+            <AddIcon />
+          </span>
+          <span class="chat-sidebar__new-copy">
+            <span class="chat-sidebar__new-title">New Chat</span>
+          </span>
+        </div>
       </t-button>
 
       <div class="chat-sidebar__meta">
-        <span>{{ sessionCountText }}</span>
-        <span>stream ready</span>
+        <span>{{ sessionCountText }} / {{ chatStore.sessionTotal }}</span>
+        <span>{{ sessionPageText }}</span>
       </div>
 
       <div class="chat-sidebar__list">
-        <button
-          v-for="session in chatStore.sessions"
-          :key="session.id"
-          class="session-card"
-          :class="{ 'session-card--active': session.id === chatStore.currentSessionId }"
-          type="button"
-          @click="chatStore.selectSession(session.id)"
-        >
-          <div class="session-card__top">
-            <span class="session-card__mode">{{ session.modeCode }}</span>
-            <span class="session-card__time">{{ session.updatedAt }}</span>
-          </div>
-          <div class="session-card__title">{{ session.title }}</div>
-        </button>
+        <section v-for="group in groupedSessions" :key="group.label" class="session-group">
+          <div class="session-group__label">{{ group.label }}</div>
+          <button
+            v-for="session in group.items"
+            :key="session.id"
+            class="session-card"
+            :class="{ 'session-card--active': session.id === chatStore.currentSessionId }"
+            type="button"
+            @click="chatStore.selectSession(session.id)"
+          >
+            <div class="session-card__header">
+              <div class="session-card__title">{{ session.title }}</div>
+              <div class="session-card__time">{{ session.updatedAt }}</div>
+            </div>
+            <div class="session-card__footer">
+              <span class="session-card__mode">{{ session.modeCode === 'expert' ? '专家模式' : '快速模式' }}</span>
+              <div class="session-card__actions">
+                <t-button
+                  size="small"
+                  variant="text"
+                  :disabled="isSessionActionDisabled(session.id)"
+                  :loading="chatStore.isUpdatingSessionTitle && chatStore.sessionActionSessionId === session.id"
+                  @click.stop="openTitleDialog(session.id)"
+                >
+                  <template #icon><EditIcon /></template>
+                  Rename
+                </t-button>
+                <t-button
+                  size="small"
+                  theme="danger"
+                  variant="text"
+                  :disabled="isSessionActionDisabled(session.id)"
+                  :loading="chatStore.isDeletingSession && chatStore.sessionActionSessionId === session.id"
+                  @click.stop="openDeleteDialog(session.id)"
+                >
+                  <template #icon><DeleteIcon /></template>
+                  Delete
+                </t-button>
+              </div>
+            </div>
+          </button>
+        </section>
 
         <div v-if="!chatStore.isSessionsLoading && chatStore.sessions.length === 0" class="session-empty">
           No sessions yet. Create your first chat to start the thread.
         </div>
+      </div>
+
+      <div class="chat-sidebar__pagination">
+        <span class="chat-sidebar__page-text">{{ sessionPageText }}</span>
+        <t-button
+          v-if="chatStore.sessionHasMore"
+          size="small"
+          variant="outline"
+          :loading="chatStore.isSessionsLoading"
+          @click="chatStore.loadMoreSessions"
+        >
+          下一页
+        </t-button>
       </div>
     </aside>
 
@@ -553,29 +652,6 @@ function removePendingAttachment(fileId: number) {
           />
 
           <t-select v-model="chatStore.currentModel" class="chat-header__select" :options="modelOptions" />
-
-          <t-button
-            class="chat-header__action-button"
-            variant="outline"
-            :disabled="isSessionActionDisabled"
-            :loading="chatStore.isUpdatingSessionTitle"
-            @click="openTitleDialog"
-          >
-            <template #icon><EditIcon /></template>
-            Rename
-          </t-button>
-
-          <t-button
-            class="chat-header__action-button"
-            theme="danger"
-            variant="outline"
-            :disabled="isSessionActionDisabled"
-            :loading="chatStore.isDeletingSession"
-            @click="openDeleteDialog"
-          >
-            <template #icon><DeleteIcon /></template>
-            Delete
-          </t-button>
         </div>
       </header>
 
@@ -793,9 +869,9 @@ function removePendingAttachment(fileId: number) {
         <p class="session-dialog__text">
           删除后该会话会从当前列表移除，前端会自动切换到剩余会话；如果没有剩余会话，则回到空态。
         </p>
-        <div v-if="canManageCurrentSession" class="session-dialog__danger-card">
+        <div v-if="targetSession" class="session-dialog__danger-card">
           <div class="session-dialog__danger-label">当前会话</div>
-          <div class="session-dialog__danger-title">{{ chatStore.currentSessionTitle }}</div>
+          <div class="session-dialog__danger-title">{{ targetSession.title }}</div>
         </div>
       </div>
     </t-dialog>

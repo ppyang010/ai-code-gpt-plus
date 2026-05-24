@@ -33,6 +33,7 @@ export interface SessionPreview {
   title: string
   modeCode: 'quick' | 'expert'
   updatedAt: string
+  updatedAtRaw: string
   defaultModelId: number | null
   defaultModelCode: string | null
   defaultModelName: string | null
@@ -54,6 +55,7 @@ const EMPTY_SESSION_TITLE = '新会话'
 const MESSAGE_STATUS_FAILED = 0
 const MESSAGE_STATUS_INTERRUPTED = 2
 const MESSAGE_STATUS_GENERATING = 3
+const SESSION_PAGE_SIZE = 8
 
 function formatRelativeTime(value: string | null) {
   if (!value) {
@@ -79,6 +81,7 @@ function normalizeSession(session: ChatSessionListItem): SessionPreview {
     title: session.title || '未命名会话',
     modeCode: session.modeCode,
     updatedAt: formatRelativeTime(session.lastMessageAt || session.createdAt),
+    updatedAtRaw: session.lastMessageAt || session.createdAt,
     defaultModelId: session.defaultModelId,
     defaultModelCode: session.defaultModelCode,
     defaultModelName: session.defaultModelName,
@@ -134,6 +137,9 @@ export const useChatStore = defineStore('chat', () => {
   const lastRetryContent = ref('')
   const pendingAttachments = ref<FileAssetItem[]>([])
   const isImageUploading = ref(false)
+  const sessionTotal = ref(0)
+  const sessionPageNo = ref(1)
+  const sessionHasMore = ref(false)
   let activeStreamAbortController: AbortController | null = null
   let activeStreamSessionId: number | null = null
   let activeStreamMessageId: number | null = null
@@ -174,17 +180,26 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function loadSessions() {
+  async function loadSessions(options?: { append?: boolean }) {
     isSessionsLoading.value = true
     errorMessage.value = ''
+    const append = options?.append === true
+    const requestPageNo = append ? sessionPageNo.value + 1 : 1
+    const requestPageSize = append ? SESSION_PAGE_SIZE : Math.max(SESSION_PAGE_SIZE, sessions.value.length || 0)
 
     try {
       const response = await http.get<PageResponse<ChatSessionListItem>>('/chat/session/list', {
-        pageNo: 1,
-        pageSize: 50,
+        pageNo: requestPageNo,
+        pageSize: requestPageSize,
       })
 
-      sessions.value = response.list.map(normalizeSession)
+      const nextSessions = response.list.map(normalizeSession)
+      sessions.value = append ? [...sessions.value, ...nextSessions] : nextSessions
+      sessionTotal.value = response.total
+      sessionPageNo.value = append
+        ? requestPageNo
+        : Math.max(1, Math.ceil(Math.max(nextSessions.length, SESSION_PAGE_SIZE) / SESSION_PAGE_SIZE))
+      sessionHasMore.value = sessions.value.length < response.total
 
       const hasCurrentSession = sessions.value.some((session) => session.id === currentSessionId.value)
       if (!hasCurrentSession) {
@@ -196,6 +211,13 @@ export const useChatStore = defineStore('chat', () => {
     } finally {
       isSessionsLoading.value = false
     }
+  }
+
+  async function loadMoreSessions() {
+    if (isSessionsLoading.value || !sessionHasMore.value) {
+      return
+    }
+    await loadSessions({ append: true })
   }
 
   async function loadMessages(sessionId: number) {
@@ -254,12 +276,15 @@ export const useChatStore = defineStore('chat', () => {
         title: created.title || EMPTY_SESSION_TITLE,
         modeCode: created.modeCode,
         updatedAt: formatRelativeTime(created.createdAt),
+        updatedAtRaw: created.createdAt,
         defaultModelId: created.defaultModelId ?? createdModel.id,
         defaultModelCode: createdModel.code,
         defaultModelName: createdModel.label,
       }
 
       sessions.value = [nextSession, ...sessions.value]
+      sessionTotal.value += 1
+      sessionHasMore.value = sessions.value.length < sessionTotal.value
       currentSessionId.value = created.sessionId
       currentSessionTitle.value = nextSession.title
       currentModel.value = createdModel.code
@@ -667,6 +692,8 @@ export const useChatStore = defineStore('chat', () => {
       const deletedCurrentSession = currentSessionId.value === sessionId
 
       sessions.value = remainingSessions
+      sessionTotal.value = Math.max(0, sessionTotal.value - 1)
+      sessionHasMore.value = sessions.value.length < sessionTotal.value
 
       if (!deletedCurrentSession) {
         return true
@@ -714,7 +741,11 @@ export const useChatStore = defineStore('chat', () => {
     isResponding,
     isSessionsLoading,
     isUpdatingSessionTitle,
+    sessionHasMore,
+    sessionPageNo,
+    sessionTotal,
     loadMessages,
+    loadMoreSessions,
     loadModels,
     loadSessions,
     messages,

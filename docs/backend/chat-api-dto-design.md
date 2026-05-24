@@ -37,6 +37,7 @@
 
 - 图片上传当前已收敛为非断点续传直传版本，并已接入 `attachmentIds` 关联聊天消息
 - 聊天响应中断后继续当前已进入代码实现并完成本地联调验证
+- 联网搜索当前不再只作为预留字段，后续需要按明确能力实现 `enableWebSearch`
 
 ## 模式设计
 
@@ -263,6 +264,12 @@ GET /api/chat/session/list?pageNo=1&pageSize=20
 |---|---|---:|---|
 | pageNo | Integer | 否 | 页码，默认 1 |
 | pageSize | Integer | 否 | 每页大小，默认 20 |
+
+### 页面交互约束
+
+- 左侧 session 列表需要按分页结果分批加载，避免会话增多后继续拉伸页面高度
+- 前端聊天页需要保持单屏布局：左侧 session 区、右侧消息区和底部输入区都固定在一个视口内
+- 当 session 超过当前页容量时，前端通过“继续加载”或滚动触底加载下一页，而不是让输入框被挤出视口
 
 ### 响应 DTO
 
@@ -540,7 +547,7 @@ Accept: text/event-stream
 | systemPrompt | String | 否 | 本次附加提示词，和模式模板合并使用 |
 | attachmentIds | List<Long> | 否 | 已上传附件 ID 列表，支持图片附件，按用户选择顺序传入 |
 | enableDeepThinking | Boolean | 否 | 预留字段 |
-| enableWebSearch | Boolean | 否 | 预留字段 |
+| enableWebSearch | Boolean | 否 | 是否启用联网搜索；开启后服务端需先检索，再把结果摘要注入模型上下文 |
 | regenerateMessageId | Long | 否 | 若是重新生成，传上一条 assistant 消息 ID |
 
 ### 服务端建议处理流程
@@ -548,15 +555,27 @@ Accept: text/event-stream
 1. 校验 `sessionId` 属于当前用户
 2. 校验模型是否可用
 3. 校验 `attachmentIds` 是否都属于当前用户且已完成上传
-4. 根据 `modeCode` 解析模式默认提示词模板
-5. 合并模式提示词、会话级提示词、本次请求级提示词
-6. 先落库用户消息
-7. 创建一条 assistant 占位消息，状态可先记为生成中
-8. 调用模型接口并逐段返回
-9. 流结束后更新 assistant 完整内容、token、finishReason
-10. 记录 `api_call_log`
-11. 记录 `user_token_usage`
-12. 更新 `chat_session.lastMessageAt`
+4. 如果 `enableWebSearch = true`，先执行联网检索并拿到标准化结果摘要
+5. 根据 `modeCode` 解析模式默认提示词模板
+6. 合并模式提示词、会话级提示词、本次请求级提示词和联网搜索结果摘要
+7. 先落库用户消息
+8. 创建一条 assistant 占位消息，状态可先记为生成中
+9. 调用模型接口并逐段返回
+10. 流结束后更新 assistant 完整内容、token、finishReason
+11. 记录 `api_call_log`
+12. 记录 `user_token_usage`
+13. 更新 `chat_session.lastMessageAt`
+
+### 联网搜索第一版建议
+
+- 先抽象 `WebSearchService`，不要把具体搜索供应商直接写死在聊天 service 中
+- 第一版只要求把搜索结果摘要注入模型上下文，不要求单独做搜索结果页
+- 搜索结果建议保留：
+  - 标题
+  - 摘要
+  - 来源 URL
+  - 抓取时间
+- 后续如果需要前端展示引用来源，再把这些结果透给消息元数据
 
 ---
 
