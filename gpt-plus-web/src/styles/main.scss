@@ -221,24 +221,27 @@ textarea {
 
 .session-card {
   width: 100%;
-  border: 0;
+  border: 1px solid #e5e6eb;
   border-radius: 14px;
   padding: 12px 14px 10px;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.78);
   text-align: left;
   cursor: pointer;
   position: relative;
   transition:
     background 160ms ease,
+    border-color 160ms ease,
     box-shadow 160ms ease;
 }
 
 .session-card:hover {
   background: rgba(0, 82, 217, 0.06);
+  border-color: rgba(0, 82, 217, 0.16);
 }
 
 .session-card--active {
   background: #dfeafe;
+  border-color: rgba(0, 82, 217, 0.28);
   box-shadow: inset 0 0 0 1px rgba(0, 82, 217, 0.08);
 }
 
@@ -278,8 +281,15 @@ textarea {
 .session-card__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   opacity: 0.88;
+}
+
+.session-card__icon-button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
 }
 
 .chat-main {
@@ -316,6 +326,10 @@ textarea {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.chat-header__mode-toggle {
+  flex-shrink: 0;
 }
 
 .chat-header__select {
@@ -455,6 +469,13 @@ textarea {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.composer__send-button {
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  box-shadow: 0 6px 14px rgba(0, 82, 217, 0.18);
 }
 
 .chat-attachment-grid {

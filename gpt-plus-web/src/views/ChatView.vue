@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AddIcon, DeleteIcon, EditIcon, SearchIcon } from 'tdesign-icons-vue-next'
+import { AddIcon, DeleteIcon, EditIcon, SearchIcon, SendIcon } from 'tdesign-icons-vue-next'
 import hljs from 'highlight.js'
 import MarkdownIt from 'markdown-it'
 import { MessagePlugin } from 'tdesign-vue-next'
@@ -66,9 +66,11 @@ const groupedSessions = computed(() => {
     { label: '更早', items: groups.earlier },
   ].filter((group) => group.items.length > 0)
 })
+type ModeCode = SessionPreview['modeCode']
+
 const modeOptions = [
-  { label: 'Quick Mode', value: 'quick' },
-  { label: 'Expert Mode', value: 'expert' },
+  { label: '快速', value: 'quick' },
+  { label: '思考', value: 'expert' },
 ]
 const modelOptions = computed(() =>
   chatStore.availableModels.map((option) => ({
@@ -135,6 +137,15 @@ const chatListData = computed(() =>
 )
 const hasMessages = computed(() => chatListData.value.length > 0)
 const hasInlineError = computed(() => Boolean(chatStore.errorMessage))
+
+function getModeLabel(modeCode: ModeCode, options?: { compact?: boolean }) {
+  // 后端仍然使用 quick / expert 作为持久化和接口码值，前端展示层将其解释为快速 / 思考模式。
+  if (modeCode === 'expert') {
+    return options?.compact ? '思考' : '思考模式'
+  }
+
+  return options?.compact ? '快速' : '快速模式'
+}
 
 function getLastMessage() {
   return chatStore.messages[chatStore.messages.length - 1]
@@ -589,28 +600,34 @@ function removePendingAttachment(fileId: number) {
               <div class="session-card__time">{{ session.updatedAt }}</div>
             </div>
             <div class="session-card__footer">
-              <span class="session-card__mode">{{ session.modeCode === 'expert' ? '专家模式' : '快速模式' }}</span>
+              <span class="session-card__mode">{{ getModeLabel(session.modeCode) }}</span>
               <div class="session-card__actions">
                 <t-button
+                  class="session-card__icon-button"
                   size="small"
                   variant="text"
+                  shape="square"
+                  aria-label="Rename session"
+                  title="Rename"
                   :disabled="isSessionActionDisabled(session.id)"
                   :loading="chatStore.isUpdatingSessionTitle && chatStore.sessionActionSessionId === session.id"
                   @click.stop="openTitleDialog(session.id)"
                 >
                   <template #icon><EditIcon /></template>
-                  Rename
                 </t-button>
                 <t-button
+                  class="session-card__icon-button"
                   size="small"
                   theme="danger"
                   variant="text"
+                  shape="square"
+                  aria-label="Delete session"
+                  title="Delete"
                   :disabled="isSessionActionDisabled(session.id)"
                   :loading="chatStore.isDeletingSession && chatStore.sessionActionSessionId === session.id"
                   @click.stop="openDeleteDialog(session.id)"
                 >
                   <template #icon><DeleteIcon /></template>
-                  Delete
                 </t-button>
               </div>
             </div>
@@ -646,6 +663,7 @@ function removePendingAttachment(fileId: number) {
         <div class="chat-header__actions">
           <t-radio-group
             v-model="chatStore.currentMode"
+            class="chat-header__mode-toggle"
             theme="button"
             variant="primary-filled"
             :options="modeOptions"
@@ -802,7 +820,19 @@ function removePendingAttachment(fileId: number) {
               >
                 停止生成
               </t-button>
-              <span class="composer__mode">mode: {{ chatStore.currentMode }}</span>
+              <t-button
+                v-else
+                class="composer__send-button"
+                theme="primary"
+                shape="circle"
+                :disabled="!canSend"
+                aria-label="Send message"
+                title="Send"
+                @click="handleSendClick()"
+              >
+                <template #icon><SendIcon /></template>
+              </t-button>
+              <span class="composer__mode">当前模式：{{ getModeLabel(chatStore.currentMode, { compact: true }) }}</span>
             </div>
           </template>
         </t-chat-sender>

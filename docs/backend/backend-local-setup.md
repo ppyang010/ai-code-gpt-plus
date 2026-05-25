@@ -1,6 +1,6 @@
 # 后端本地环境与启动说明
 
-最后更新：2026-05-15
+最后更新：2026-05-25
 
 ## 项目目录
 
@@ -152,6 +152,13 @@ cd /Users/ccy/CcyProjects/ai-code-gpt-plus/gpt-plus-core
 jenv exec mvn spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
+或者直接使用仓库脚本：
+
+```bash
+cd /Users/ccy/CcyProjects/ai-code-gpt-plus
+./scripts/start-backend.sh
+```
+
 如果后续你希望统一走 `local` 配置文件，也可以在 IDEA 或启动脚本里固定加上：
 
 - `spring.profiles.active=local`
@@ -194,6 +201,13 @@ cd /Users/ccy/CcyProjects/ai-code-gpt-plus/gpt-plus-core
 jenv exec mvn spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
+或者：
+
+```bash
+cd /Users/ccy/CcyProjects/ai-code-gpt-plus
+./scripts/start-backend.sh
+```
+
 ### 5. 验证真实 DeepSeek 流式输出
 
 ```bash
@@ -227,3 +241,4 @@ curl -N -X POST "http://127.0.0.1:8080/api/chat/message/send" \
 2. 本地数据库已经初始化完成
 3. 项目 JDK 应使用 `jenv` 管理的 `25.0.2`
 4. 编译和启动优先使用 `jenv exec` 前缀执行
+5. 如果只是启动本地后端，优先使用 `./scripts/start-backend.sh`

@@ -1,6 +1,6 @@
 # 前端本地启动说明
 
-最后更新：2026-05-18
+最后更新：2026-05-25
 
 ## 项目目录
 
@@ -61,11 +61,24 @@ cd /Users/ccy/CcyProjects/ai-code-gpt-plus/gpt-plus-web
 npm run dev
 ```
 
+或者直接使用仓库脚本：
+
+```bash
+cd /Users/ccy/CcyProjects/ai-code-gpt-plus
+./scripts/start-frontend.sh
+```
+
 默认启动后：
 
 - 本地开发地址通常为：`http://127.0.0.1:5173`
 - 若端口被占用，Vite 会提示新的端口
 - 当前 `vite.config.ts` 已内置 `/api -> http://127.0.0.1:8080` 代理，便于本地联调
+
+如果需要自定义监听地址，可临时覆盖：
+
+```bash
+VITE_HOST=0.0.0.0 VITE_PORT=5174 ./scripts/start-frontend.sh
+```
 
 ## 生产构建验证
 
@@ -141,3 +154,5 @@ npm run format
 4. 构建校验命令是 `npm run build`
 5. 代码质量校验命令是 `npm run lint` 和 `npm run format:check`
 6. 默认通过 `/api` 代理访问本地后端
+7. 如果只是启动本地前端，优先使用 `./scripts/start-frontend.sh`
+8. 如果需要同时启动前后端联调，可在仓库根目录执行 `./scripts/start-services.sh`

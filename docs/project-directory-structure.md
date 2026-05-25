@@ -1,6 +1,6 @@
 # GPT Plus 项目目录结构说明
 
-最后更新：2026-05-22
+最后更新：2026-05-25
 
 ## 目的
 
@@ -10,20 +10,24 @@
 
 ```text
 ai-code-gpt-plus/
+├── README.md
 ├── task.md
 ├── docs/
 │   ├── backend/
 │   ├── db/
 │   ├── frontend/
 │   └── rules/
+├── scripts/
 ├── gpt-plus-core/
 └── gpt-plus-web/
 ```
 
 | 目录/文件 | 作用 |
 | --- | --- |
+| `README.md` | 仓库入口说明，介绍项目结构、本地运行前提、启动脚本和常用命令。 |
 | `task.md` | 项目总任务清单，只维护整体阶段、跨端状态、阻塞项和建议下一步。 |
 | `docs/` | 项目长期文档目录，保存规则、设计、启动、测试、数据库和目录说明。 |
+| `scripts/` | 项目启动脚本目录，保存前后端和联调一键启动脚本。 |
 | `gpt-plus-core/` | 后端 Spring Boot 服务目录，负责接口、聊天业务、模型适配、持久化和配置。 |
 | `gpt-plus-web/` | 前端 Vue 3 应用目录，负责聊天页面、路由、状态管理、接口请求和交互展示。 |
 
@@ -197,6 +201,21 @@ docs/
 | `frontend/` | 前端任务、技术栈、本地启动流程文档。 |
 | `rules/` | 项目执行规则和 API 测试规则。 |
 
+## 启动脚本目录：`scripts`
+
+```text
+scripts/
+├── start-backend.sh
+├── start-frontend.sh
+└── start-services.sh
+```
+
+| 文件 | 作用 |
+| --- | --- |
+| `start-backend.sh` | 启动本地后端服务，默认使用 `local` profile。 |
+| `start-frontend.sh` | 启动本地前端开发服务，默认监听 `127.0.0.1:5173`。 |
+| `start-services.sh` | 同时启动前后端联调服务，任一子进程退出时一并结束。 |
+
 ### `docs/backend`
 
 | 文件/目录 | 作用 |
@@ -246,6 +265,8 @@ docs/
 - 新增后端设计、启动、接口、测试文档：放到 `docs/backend/`。
 - 新增前端设计、启动、交互、技术栈文档：放到 `docs/frontend/`。
 - 新增数据库结构或表关系说明：放到 `docs/db/`。
+- 新增项目级启动或联调脚本：优先放到 `scripts/`。
+- 新增仓库入口、整体使用说明：优先维护根目录 `README.md`。
 - 新增跨端或全局项目说明：优先放到 `docs/` 根目录。
 
 ## 不建议的放置方式
