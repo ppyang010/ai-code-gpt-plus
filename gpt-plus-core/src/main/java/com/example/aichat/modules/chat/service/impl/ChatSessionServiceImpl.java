@@ -1,6 +1,8 @@
 package com.example.aichat.modules.chat.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.aichat.common.dto.PageResponse;
 import com.example.aichat.common.enums.ChatModeEnum;
 import com.example.aichat.common.enums.ErrorCode;
@@ -55,10 +57,12 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     public PageResponse<ChatSessionListItemVO> listUserSessions(Long userId, Integer pageNo, Integer pageSize) {
         int normalizedPageNo = normalizePageNo(pageNo);
         int normalizedPageSize = normalizePageSize(pageSize);
-        long offset = (long) (normalizedPageNo - 1) * normalizedPageSize;
-
-        List<ChatSessionDO> sessions = chatSessionMapper.selectPageByUserId(userId, offset, normalizedPageSize);
-        Long total = chatSessionMapper.countByUserId(userId);
+        // 统一走 MyBatis-Plus 分页插件，减少手写 count / offset 逻辑，便于后续列表接口复用。
+        IPage<ChatSessionDO> sessionPage = chatSessionMapper.selectPageByUserId(
+                new Page<>(normalizedPageNo, normalizedPageSize),
+                userId
+        );
+        List<ChatSessionDO> sessions = sessionPage.getRecords();
 
         Set<Long> modelIds = sessions.stream()
                 .map(ChatSessionDO::getDefaultModelId)
@@ -69,7 +73,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
 
         PageResponse<ChatSessionListItemVO> response = new PageResponse<>();
         response.setList(sessions.stream().map(session -> toSessionListItem(session, modelMap)).collect(Collectors.toList()));
-        response.setTotal(total == null ? 0L : total);
+        response.setTotal(sessionPage.getTotal());
         response.setPageNo(normalizedPageNo);
         response.setPageSize(normalizedPageSize);
         return response;
@@ -134,7 +138,10 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     }
 
     private int normalizePageSize(Integer pageSize) {
-        return pageSize == null || pageSize < 1 ? 20 : pageSize;
+        if (pageSize == null || pageSize < 1) {
+            return 20;
+        }
+        return Math.min(pageSize, 100);
     }
 
     private ChatSessionDO getActiveSession(Long userId, Long sessionId) {

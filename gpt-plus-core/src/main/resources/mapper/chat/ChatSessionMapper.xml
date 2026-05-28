@@ -10,14 +10,6 @@
         WHERE user_id = #{userId}
           AND status = 1
         ORDER BY last_message_at DESC, id DESC
-        LIMIT #{pageSize} OFFSET #{offset}
-    </select>
-
-    <select id="countByUserId" resultType="java.lang.Long">
-        SELECT COUNT(1)
-        FROM chat_session
-        WHERE user_id = #{userId}
-          AND status = 1
     </select>
 
     <select id="selectActiveById" resultType="com.example.aichat.modules.chat.entity.ChatSessionDO">
