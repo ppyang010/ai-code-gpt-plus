@@ -26,6 +26,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -33,6 +35,7 @@ import org.springframework.util.StringUtils;
 @Service
 public class ChatSessionServiceImpl implements ChatSessionService {
 
+    private static final Logger log = LoggerFactory.getLogger(ChatSessionServiceImpl.class);
     private static final int SESSION_STATUS_ACTIVE = 1;
     private static final int SESSION_STATUS_DELETED = 0;
 
@@ -76,6 +79,14 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         response.setTotal(sessionPage.getTotal());
         response.setPageNo(normalizedPageNo);
         response.setPageSize(normalizedPageSize);
+        log.debug(
+                "Listed chat sessions userId={} pageNo={} pageSize={} returned={} total={}",
+                userId,
+                normalizedPageNo,
+                normalizedPageSize,
+                sessions.size(),
+                sessionPage.getTotal()
+        );
         return response;
     }
 
@@ -96,6 +107,13 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         entity.setLastMessageAt(now);
         entity.setStatus(SESSION_STATUS_ACTIVE);
         chatSessionMapper.insert(entity);
+        log.info(
+                "Created chat session userId={} sessionId={} modeCode={} defaultModelId={}",
+                userId,
+                entity.getId(),
+                entity.getModeCode(),
+                entity.getDefaultModelId()
+        );
 
         ChatSessionCreateVO response = new ChatSessionCreateVO();
         response.setSessionId(entity.getId());
@@ -121,6 +139,12 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         wrapper.eq(ChatSessionDO::getId, session.getId())
                 .set(ChatSessionDO::getTitle, request.getTitle().trim());
         chatSessionMapper.update(null, wrapper);
+        log.info(
+                "Updated chat session title userId={} sessionId={} titleLength={}",
+                userId,
+                session.getId(),
+                request.getTitle().trim().length()
+        );
     }
 
     @Override
@@ -131,6 +155,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         wrapper.eq(ChatSessionDO::getId, session.getId())
                 .set(ChatSessionDO::getStatus, SESSION_STATUS_DELETED);
         chatSessionMapper.update(null, wrapper);
+        log.info("Deleted chat session userId={} sessionId={}", userId, session.getId());
     }
 
     private int normalizePageNo(Integer pageNo) {

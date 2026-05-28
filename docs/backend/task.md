@@ -1,6 +1,6 @@
 # GPT Plus 后端任务跟踪
 
-最后更新：2026-05-25
+最后更新：2026-05-28
 
 ## 说明
 
@@ -11,6 +11,7 @@
   - [springboot-entity-mapper-design.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/springboot-entity-mapper-design.md)
   - [chat-api-dto-design.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/chat-api-dto-design.md)
   - [backend-local-setup.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/backend-local-setup.md)
+  - [backend-logging-rules.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/backend/backend-logging-rules.md)
 - 主项目总任务清单见：
   - [task.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/task.md)
 
@@ -87,7 +88,7 @@
 - [x] 参数校验（添加时间：2026-05-08，完成时间：2026-05-19）
 - [x] 错误码定义与中文错误提示（添加时间：2026-05-08，完成时间：2026-05-19）
 - [x] MyBatis-Plus 分页与通用配置，优先支撑会话列表分页查询（添加时间：2026-05-08，完成时间：2026-05-28）
-- [ ] 基础日志规范（添加时间：2026-05-08）
+- [x] 基础日志规范（添加时间：2026-05-08，完成时间：2026-05-28）
 - [x] 健康检查接口（添加时间：2026-05-08，完成时间：2026-05-19）
 - [x] 补模型初始化数据方案，避免新环境手动补 `model_provider` / `model_config`（添加时间：2026-05-08，完成时间：2026-05-15）
 
@@ -138,9 +139,9 @@
 下一步优先做这 4 件事：
 
 1. 将联网搜索从预留项升级为明确后端需求，补检索服务抽象和结果注入方案
-2. 继续补基础日志规范
-3. 整理并提交当前图片上传、布局分页与中断恢复这批已验证改动
-4. 推进登录鉴权，替换当前 `X-User-Id` 临时方案
+2. 推进登录鉴权，替换当前 `X-User-Id` 临时方案
+3. 将模式提示词改为可配置，并补 `prompt_template` 表
+4. 扩展通用文件上传能力，和前端文件上传入口对齐
 
 ## 维护规则
 

@@ -83,6 +83,13 @@ public class FileAssetServiceImpl implements FileAssetService {
 
             entity.setFileUrl(buildPublicFileUrl(entity.getId()));
             fileAssetMapper.updateById(entity);
+            log.info(
+                    "Uploaded chat image userId={} fileId={} fileSize={} contentType={}",
+                    userId,
+                    entity.getId(),
+                    entity.getFileSize(),
+                    entity.getContentType()
+            );
             return toItem(entity);
         } catch (IOException exception) {
             deleteQuietly(targetFile);

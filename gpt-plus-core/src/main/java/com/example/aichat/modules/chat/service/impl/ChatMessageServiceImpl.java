@@ -161,6 +161,16 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         chatMessageMapper.insert(userMessage);
         // 更新会话最后活跃时间，列表页可以立刻按最新发送行为排序。
         chatSessionMapper.updateLastMessageAt(session.getId(), LocalDateTime.now());
+        log.info(
+                "Accepted chat message send userId={} sessionId={} userMessageId={} nextAssistantSeqNo={} modelId={} modelCode={} attachmentCount={}",
+                userId,
+                session.getId(),
+                userMessage.getId(),
+                nextSeqNo + 1,
+                model == null ? null : model.getId(),
+                model == null ? null : model.getModelCode(),
+                attachments.size()
+        );
 
         ChatMessageDO assistantMessage = buildAssistantPlaceholder(userId, session.getId(), model, nextSeqNo + 1);
         // assistant 的占位消息、模型流式调用、SSE 增量推送和最终 token/日志回写都在异步流程里完成。
@@ -224,6 +234,14 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         }
 
         resetAssistantMessageForResume(assistantMessage, model);
+        log.info(
+                "Accepted chat regenerate userId={} sessionId={} messageId={} modelId={} modelCode={}",
+                userId,
+                session.getId(),
+                assistantMessage.getId(),
+                model == null ? null : model.getId(),
+                model == null ? null : model.getModelCode()
+        );
         streamAssistantAnswer(
                 userId,
                 session,
@@ -251,6 +269,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             StringBuilder contentBuilder = new StringBuilder(StringUtils.hasText(persistedPrefix) ? persistedPrefix : "");
             long[] lastPersistedAt = {System.currentTimeMillis()};
             int[] lastPersistedLength = {contentBuilder.length()};
+            String clientCode = "unknown";
+            long startedAt = System.currentTimeMillis();
             try {
                 if (shouldInsertAssistantMessage) {
                     chatMessageMapper.insert(assistantMessage);
@@ -260,8 +280,18 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 sendStart(session.getId(), assistantMessage.getId(), model, emitter);
 
                 ChatModelClient chatModelClient = chatModelClientRegistry.resolve(modelRequest);
+                clientCode = chatModelClient.clientCode();
                 boolean persistProviderUsage = shouldPersistProviderUsage(model, chatModelClient);
-                long startedAt = System.currentTimeMillis();
+                startedAt = System.currentTimeMillis();
+                log.info(
+                        "Starting chat model stream userId={} sessionId={} messageId={} clientCode={} modelCode={} resume={}",
+                        userId,
+                        session.getId(),
+                        assistantMessage.getId(),
+                        clientCode,
+                        modelRequest.getModelCode(),
+                        !shouldInsertAssistantMessage
+                );
                 ChatModelResponse modelResponse = chatModelClient.streamChat(
                         modelRequest,
                         chunk -> appendAndEmitChunk(
@@ -293,6 +323,19 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                         modelResponse,
                         startedAt
                 );
+                long elapsedMs = System.currentTimeMillis() - startedAt;
+                log.info(
+                        "Completed chat model stream userId={} sessionId={} messageId={} clientCode={} modelCode={} finishReason={} totalTokens={} elapsedMs={} contentLength={}",
+                        userId,
+                        session.getId(),
+                        assistantMessage.getId(),
+                        clientCode,
+                        modelResponse.getModelCode(),
+                        modelResponse.getFinishReason(),
+                        defaultInt(modelResponse.getTotalTokens()),
+                        elapsedMs,
+                        assistantMessage.getContent() == null ? 0 : assistantMessage.getContent().length()
+                );
 
                 ChatStreamEndEvent endEvent = new ChatStreamEndEvent();
                 endEvent.setMessageId(assistantMessage.getId());
@@ -304,20 +347,23 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 emitter.send(SseEmitter.event().name("message_end").data(endEvent));
                 emitter.complete();
             } catch (Exception exception) {
+                boolean clientInterrupted = isClientStreamInterrupted(exception);
+                boolean recoverableContent = hasRecoverableContent(contentBuilder);
+                long elapsedMs = System.currentTimeMillis() - startedAt;
                 try {
-                    if (isClientStreamInterrupted(exception)) {
+                    if (clientInterrupted) {
                         persistInterruptedMessage(assistantMessage, contentBuilder.toString());
-                    } else if (hasRecoverableContent(contentBuilder)) {
+                    } else if (recoverableContent) {
                         persistInterruptedMessage(assistantMessage, contentBuilder.toString());
                     } else {
                         persistFailedMessage(assistantMessage);
                     }
 
-                    if (!isClientStreamInterrupted(exception) && shouldPersistFailureUsage(exception)) {
+                    if (!clientInterrupted && shouldPersistFailureUsage(exception)) {
                         persistFailureUsage(userId, session, model, modelRequest, assistantMessage, exception);
                     }
 
-                    if (!isClientStreamInterrupted(exception) && !hasRecoverableContent(contentBuilder)) {
+                    if (!clientInterrupted && !recoverableContent) {
                         ChatStreamErrorEvent errorEvent = new ChatStreamErrorEvent();
                         errorEvent.setMessageId(assistantMessage.getId());
                         errorEvent.setErrorCode("CHAT_STREAM_ERROR");
@@ -326,6 +372,45 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                     }
                 } catch (Exception finalizeException) {
                     log.warn("Failed to finalize interrupted chat stream for messageId={}", assistantMessage.getId(), finalizeException);
+                }
+                if (clientInterrupted) {
+                    log.warn(
+                            "Chat model stream interrupted by client userId={} sessionId={} messageId={} clientCode={} modelCode={} elapsedMs={} contentLength={}",
+                            userId,
+                            session.getId(),
+                            assistantMessage.getId(),
+                            clientCode,
+                            modelRequest.getModelCode(),
+                            elapsedMs,
+                            contentBuilder.length()
+                    );
+                } else if (recoverableContent) {
+                    log.warn(
+                            "Chat model stream interrupted after partial content userId={} sessionId={} messageId={} clientCode={} modelCode={} elapsedMs={} contentLength={} errorType={} errorCode={} httpStatus={}",
+                            userId,
+                            session.getId(),
+                            assistantMessage.getId(),
+                            clientCode,
+                            modelRequest.getModelCode(),
+                            elapsedMs,
+                            contentBuilder.length(),
+                            exception.getClass().getSimpleName(),
+                            resolveModelErrorCode(exception),
+                            resolveModelHttpStatus(exception)
+                    );
+                } else {
+                    log.error(
+                            "Chat model stream failed userId={} sessionId={} messageId={} clientCode={} modelCode={} elapsedMs={} errorCode={} httpStatus={}",
+                            userId,
+                            session.getId(),
+                            assistantMessage.getId(),
+                            clientCode,
+                            modelRequest.getModelCode(),
+                            elapsedMs,
+                            resolveModelErrorCode(exception),
+                            resolveModelHttpStatus(exception),
+                            exception
+                    );
                 }
                 emitter.complete();
             }
@@ -603,6 +688,20 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
     private boolean isClientStreamInterrupted(Exception exception) {
         return exception instanceof ChatStreamInterruptedException;
+    }
+
+    private String resolveModelErrorCode(Exception exception) {
+        if (exception instanceof ChatModelClientException clientException) {
+            return clientException.getErrorCode();
+        }
+        return exception.getClass().getSimpleName();
+    }
+
+    private Integer resolveModelHttpStatus(Exception exception) {
+        if (exception instanceof ChatModelClientException clientException) {
+            return clientException.getHttpStatus();
+        }
+        return null;
     }
 
     private int defaultInt(Integer value) {
