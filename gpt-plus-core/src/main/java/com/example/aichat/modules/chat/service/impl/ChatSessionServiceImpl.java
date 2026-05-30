@@ -203,6 +203,9 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .collect(Collectors.toMap(ModelConfigDO::getId, Function.identity(), (left, right) -> left));
     }
 
+    /**
+     * 组装会话列表项，同时补齐最近消息预览和首条用户问题预览这两类不同展示素材。
+     */
     private ChatSessionListItemVO toSessionListItem(ChatSessionDO session, Map<Long, ModelConfigDO> modelMap) {
         ChatSessionListItemVO item = new ChatSessionListItemVO();
         item.setSessionId(session.getId());
@@ -223,6 +226,11 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         if (!latestMessages.isEmpty()) {
             String content = latestMessages.get(0).getContent();
             item.setLastMessagePreview(shorten(content, 50));
+        }
+        // 默认标题的识别兜底必须来自用户第一问，避免最近 assistant 回答反向污染会话标题。
+        ChatMessageDO firstUserMessage = chatMessageMapper.selectFirstUserMessage(session.getId());
+        if (firstUserMessage != null) {
+            item.setFirstUserMessagePreview(shorten(firstUserMessage.getContent(), 50));
         }
         return item;
     }

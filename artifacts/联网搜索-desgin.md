@@ -115,16 +115,26 @@
 - `infrastructure/search/...Properties`
   - 负责配置供应商地址、API Key、超时时间、结果条数上限
 
+第一版具体落地：
+
+- `infrastructure/search/TavilyWebSearchClient`
+  - 通过 `app.web-search.provider=tavily` 启用
+  - 调用 `POST {app.web-search.base-url}/search`
+  - 使用 `WEB_SEARCH_API_KEY` / `app.web-search.api-key` 配置鉴权
+
 建议的数据结构：
 
 - `WebSearchResultItem`
   - `title`
   - `snippet`
-  - `sourceUrl`
-  - `fetchedAt`
+  - `url`
+  - `source`
+  - `score`
 - `WebSearchContext`
   - `enabled`
-  - `summaryPrompt`
+  - `executed`
+  - `status`
+  - `summary`
   - `results`
 
 #### 3.2 后端：发送消息链路
@@ -145,13 +155,18 @@ assistant message 的 metadata 建议结构：
 ```json
 {
   "webSearchEnabled": true,
+  "webSearchExecuted": true,
+  "webSearchStatus": "success",
+  "webSearchMode": "auto",
+  "webSearchRuleId": "fresh_information",
   "webSearchSummary": "...",
   "webSearchResults": [
     {
       "title": "...",
       "snippet": "...",
-      "sourceUrl": "...",
-      "fetchedAt": "2026-05-28T10:00:00"
+      "url": "...",
+      "source": "example.com",
+      "score": 0.92
     }
   ]
 }

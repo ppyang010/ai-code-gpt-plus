@@ -39,26 +39,27 @@
 
 ### P1：接口契约变更（不实现逻辑）
 
-- [ ] 定义后端 `WebSearchService`、`WebSearchContext`、`WebSearchResultItem` 等抽象与数据结构（添加时间：2026-05-28）
-- [ ] 调整 `ChatMessageItemVO`，增加 `webSearchEnabled` 显式返回字段（添加时间：2026-05-28）
+- [x] 定义后端 `WebSearchService`、`WebSearchContext`、`WebSearchResultItem` 等抽象与数据结构（添加时间：2026-05-28，完成时间：2026-05-30）
+- [x] 调整 `ChatMessageItemVO`，增加 `webSearchEnabled` 显式返回字段（添加时间：2026-05-28，完成时间：2026-05-30）
 - [x] 调整前端 `ChatMessageSendRequest` 和 store 状态，补 `enableWebSearch` / `webSearchMode` 契约（添加时间：2026-05-28，完成时间：2026-05-28）
-- [ ] 为搜索供应商补配置结构和示例配置项，不实现具体调用逻辑（添加时间：2026-05-28）
+- [x] 为搜索供应商补配置结构和示例配置项（添加时间：2026-05-28，完成时间：2026-05-30）
 
 ### P2：接口具体逻辑实现
 
-- [ ] 实现后端 `WebSearchService` 与具体搜索 client，完成结果标准化和摘要构造（添加时间：2026-05-28）
-- [ ] 改造 `ChatMessageServiceImpl.sendMessage(...)`，在 `enableWebSearch=true` 时执行搜索并注入 prompt（添加时间：2026-05-28）
-- [ ] 改造 assistant message metadata 持久化，保存 `webSearchEnabled`、搜索摘要和结果列表（添加时间：2026-05-28）
-- [ ] 改造 `regenerateMessage(...)`，让继续生成复用已持久化的搜索摘要，而不是重新搜索或丢失上下文（添加时间：2026-05-28）
-- [ ] 改造消息列表解析，把 assistant metadata 中的 `webSearchEnabled` 回填到 `ChatMessageItemVO`（添加时间：2026-05-28）
+- [x] 实现后端 `WebSearchService` 与具体搜索 client，完成结果标准化和摘要构造（添加时间：2026-05-28，完成时间：2026-05-30）
+- [x] 改造 `ChatMessageServiceImpl.sendMessage(...)`，在 `enableWebSearch=true` 时执行搜索并注入 prompt（添加时间：2026-05-28，完成时间：2026-05-30）
+- [x] 改造 assistant message metadata 持久化，保存 `webSearchEnabled`、搜索摘要和结果列表（添加时间：2026-05-28，完成时间：2026-05-30）
+- [x] 改造 `regenerateMessage(...)`，让继续生成复用已持久化的搜索摘要，而不是重新搜索或丢失上下文（添加时间：2026-05-28，完成时间：2026-05-30）
+- [x] 改造消息列表解析，把 assistant metadata 中的 `webSearchEnabled` 回填到 `ChatMessageItemVO`（添加时间：2026-05-28，完成时间：2026-05-30）
 - [x] 改造前端输入区，增加联网搜索三态入口，并在发送 payload 中透传 `enableWebSearch` + `webSearchMode`（添加时间：2026-05-28，完成时间：2026-05-28）
 - [x] 为 `auto` 模式补第一版后端意图规则表，支持按优先级定义“哪些要联网、哪些不要联网”（添加时间：2026-05-28，完成时间：2026-05-28）
-- [ ] 改造前端消息区，对已联网搜索的 assistant 回复增加结果提示交互（添加时间：2026-05-28）
+- [x] 改造前端消息区，对已联网搜索的 assistant 回复增加结果提示交互（添加时间：2026-05-28，完成时间：2026-05-30）
 
 ### P3：测试用例
 
 - [ ] 补 `enableWebSearch=false` 的发送回归用例，确认普通聊天链路无回归（添加时间：2026-05-28）
-- [ ] 补后端 `webSearchMode=auto` 的意图判定用例，覆盖命中联网意图、命中非联网意图和未命中默认分支（添加时间：2026-05-28）
+- [x] 补后端 `webSearchMode=auto` 的意图判定用例，覆盖命中联网意图、命中非联网意图和非法模式分支（添加时间：2026-05-28，完成时间：2026-05-30）
+- [x] 补后端 `WebSearchService` 成功摘要和搜索配置缺失的单测（添加时间：2026-05-30，完成时间：2026-05-30）
 - [ ] 补 `enableWebSearch=true` 且搜索成功的发送 / 刷新回显用例（添加时间：2026-05-28）
 - [ ] 补搜索空结果、搜索超时、供应商报错的失败分支用例（添加时间：2026-05-28）
 - [ ] 补联网搜索回答中断后 `regenerate` 继续生成的恢复用例（添加时间：2026-05-28）

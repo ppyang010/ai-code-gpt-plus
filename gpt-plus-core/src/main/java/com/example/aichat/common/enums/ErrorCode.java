@@ -22,6 +22,10 @@ public enum ErrorCode {
     FILE_ASSET_NOT_FOUND(404, "图片附件不存在"),
     FILE_UPLOAD_FAILED(500, "图片上传失败，请稍后重试"),
     DEEPSEEK_API_KEY_NOT_CONFIGURED(503, "DeepSeek API Key 未配置"),
+    // 后端判定必须联网但搜索开关、API Key 或客户端配置缺失。
+    WEB_SEARCH_NOT_CONFIGURED(503, "联网搜索未配置"),
+    // 搜索供应商请求失败时统一返回，具体供应商错误只写日志。
+    WEB_SEARCH_FAILED(502, "联网搜索失败，请稍后重试"),
     INTERNAL_ERROR(500, "服务开小差了，请稍后重试");
 
     private final int code;

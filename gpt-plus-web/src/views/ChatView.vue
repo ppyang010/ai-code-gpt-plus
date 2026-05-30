@@ -73,10 +73,10 @@ const modeOptions = [
   { label: '快速', value: 'quick' },
   { label: '思考', value: 'expert' },
 ]
-const webSearchModeOptions = [
+const webSearchModeOptions: Array<{ label: string; value: WebSearchMode }> = [
   { label: '关闭', value: 'disabled' },
+  { label: '自动', value: 'auto' },
   { label: '开启', value: 'enabled' },
-  { label: '自动判断', value: 'auto' },
 ]
 const modelOptions = computed(() =>
   chatStore.availableModels.map((option) => ({
@@ -84,17 +84,6 @@ const modelOptions = computed(() =>
     value: option.code,
   })),
 )
-const webSearchHint = computed(() => {
-  if (chatStore.currentWebSearchMode === 'enabled') {
-    return '当前消息会直接按联网搜索发送'
-  }
-
-  if (chatStore.currentWebSearchMode === 'disabled') {
-    return '当前消息按普通聊天发送'
-  }
-
-  return '自动判断会在服务端根据用户意图规则决定是否联网'
-})
 const skeletonRows = [
   [
     { width: '42px', height: '42px', type: 'circle' },
@@ -174,6 +163,27 @@ function getWebSearchModeLabel(mode: WebSearchMode) {
   }
 
   return '自动判断'
+}
+
+// 将后端搜索状态压成短文案，避免消息区展示过多供应商细节。
+function getWebSearchBadgeText(message: ChatMessage) {
+  if (!message.webSearchEnabled) {
+    return ''
+  }
+
+  if (message.webSearchExecuted) {
+    return '已联网搜索'
+  }
+
+  if (message.webSearchStatus === 'failed') {
+    return '联网搜索失败'
+  }
+
+  if (message.webSearchStatus === 'skipped') {
+    return '联网搜索未执行'
+  }
+
+  return '联网搜索'
 }
 
 function getLastMessage() {
@@ -496,6 +506,7 @@ function openTitleDialog(sessionId: number) {
   }
 
   targetSessionId.value = sessionId
+  // 编辑仍读取后端原始标题，避免把“第一问摘要兜底展示”保存成用户标题。
   titleDraft.value = session.title
   isTitleDialogVisible.value = true
 }
@@ -544,7 +555,7 @@ async function confirmDeleteDialog() {
     return
   }
 
-  const deletedTitle = targetSession.value.title
+  const deletedTitle = targetSession.value.displayTitle
   const success = await chatStore.deleteSession(targetSession.value.id)
   if (success) {
     MessagePlugin.success(chatStore.sessions.length > 0 ? `已删除「${deletedTitle}」` : '已删除当前会话，列表已清空')
@@ -625,7 +636,7 @@ function removePendingAttachment(fileId: number) {
             @click="chatStore.selectSession(session.id)"
           >
             <div class="session-card__header">
-              <div class="session-card__title">{{ session.title }}</div>
+              <div class="session-card__title">{{ session.displayTitle }}</div>
               <div class="session-card__time">{{ session.updatedAt }}</div>
             </div>
             <div class="session-card__footer">
@@ -720,6 +731,13 @@ function removePendingAttachment(fileId: number) {
         >
           <template #content="{ item }">
             <template v-for="(content, contentIndex) in item.content" :key="contentIndex">
+              <!-- 只提示联网状态，完整搜索来源暂时保留在后端 metadata 中。 -->
+              <div
+                v-if="item.sourceMessage.role === 'assistant' && item.sourceMessage.webSearchEnabled"
+                class="chat-message__web-search-badge"
+              >
+                {{ getWebSearchBadgeText(item.sourceMessage) }}
+              </div>
               <div
                 v-if="item.sourceMessage.role === 'assistant'"
                 class="chat-markdown"
@@ -836,14 +854,24 @@ function removePendingAttachment(fileId: number) {
               >
                 {{ chatStore.isImageUploading ? '上传中...' : '添加图片' }}
               </button>
-              <t-select
-                v-model="chatStore.currentWebSearchMode"
-                class="composer__web-search-select"
-                size="small"
-                :disabled="chatStore.isResponding"
-                :options="webSearchModeOptions"
-              />
-              <span class="composer__hint">{{ webSearchHint }}</span>
+              <!-- 联网模式保留为紧凑下拉，避免长说明挤占输入区空间。 -->
+              <label class="composer__web-search-dropdown">
+                <span class="composer__web-search-label">联网</span>
+                <select
+                  v-model="chatStore.currentWebSearchMode"
+                  class="composer__web-search-select"
+                  :disabled="chatStore.isResponding"
+                  aria-label="联网搜索模式"
+                >
+                  <option
+                    v-for="option in webSearchModeOptions"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+              </label>
             </div>
           </template>
 
@@ -940,7 +968,7 @@ function removePendingAttachment(fileId: number) {
         </p>
         <div v-if="targetSession" class="session-dialog__danger-card">
           <div class="session-dialog__danger-label">当前会话</div>
-          <div class="session-dialog__danger-title">{{ targetSession.title }}</div>
+          <div class="session-dialog__danger-title">{{ targetSession.displayTitle }}</div>
         </div>
       </div>
     </t-dialog>

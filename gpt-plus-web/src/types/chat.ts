@@ -44,6 +44,8 @@ export interface ChatSessionListItem {
   defaultModelCode: string | null
   defaultModelName: string | null
   lastMessagePreview: string | null
+  /** 首条用户问题摘要，用于默认标题会话的标题展示兜底。 */
+  firstUserMessagePreview: string | null
   lastMessageAt: string | null
   createdAt: string
 }
@@ -87,6 +89,12 @@ export interface ChatMessageItem {
   completionTokens: number
   totalTokens: number
   attachments?: FileAssetItem[]
+  /** 后端从 assistant metadata 解析出的联网搜索开关状态。 */
+  webSearchEnabled?: boolean
+  /** 后端从 assistant metadata 解析出的真实搜索执行状态。 */
+  webSearchExecuted?: boolean
+  /** 联网搜索状态，用于消息列表展示轻量提示。 */
+  webSearchStatus?: string | null
   createdAt: string
 }
 
@@ -123,6 +131,12 @@ export interface ChatStreamStartEvent {
   modelId: number | null
   modelCode: string | null
   modelName: string | null
+  /** 流式开始时同步的联网搜索开关状态。 */
+  webSearchEnabled?: boolean
+  /** 流式开始时同步的真实搜索执行状态。 */
+  webSearchExecuted?: boolean
+  /** 流式开始时同步的联网搜索状态。 */
+  webSearchStatus?: string | null
 }
 
 export interface ChatStreamDeltaEvent {

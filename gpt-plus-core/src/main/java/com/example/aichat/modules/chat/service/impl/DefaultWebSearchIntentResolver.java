@@ -12,16 +12,28 @@ import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+/**
+ * 第一版联网搜索意图解析器，使用可扩展的规则表完成自动判断。
+ */
 @Component
 public class DefaultWebSearchIntentResolver implements WebSearchIntentResolver {
 
+    /** 手动关闭联网搜索。 */
     private static final String MODE_DISABLED = "disabled";
+    /** 手动开启联网搜索。 */
     private static final String MODE_ENABLED = "enabled";
+    /** 由后端根据用户内容自动判断是否联网。 */
     private static final String MODE_AUTO = "auto";
+    /** 规则动作：需要联网。 */
     private static final String ACTION_ENABLE = "enable";
+    /** 规则动作：不需要联网。 */
     private static final String ACTION_DISABLE = "disable";
+    /** 自动判断规则表，按优先级从高到低匹配。 */
     private static final List<WebSearchIntentRule> AUTO_RULES = buildAutoRules();
 
+    /**
+     * 解析前端传入模式和兼容布尔字段，返回最终联网搜索决策。
+     */
     @Override
     public WebSearchIntentResolution resolve(String webSearchMode, Boolean enableWebSearch, String content) {
         String normalizedMode = normalizeMode(webSearchMode, enableWebSearch);
@@ -44,6 +56,7 @@ public class DefaultWebSearchIntentResolver implements WebSearchIntentResolver {
             );
         }
 
+        // auto 模式只匹配第一条最高优先级规则，便于后续通过调整规则表扩展行为。
         WebSearchIntentRule matchedRule = matchAutoRule(content);
         if (matchedRule == null) {
             return new WebSearchIntentResolution(normalizedMode, false, null, null, null);
@@ -57,6 +70,9 @@ public class DefaultWebSearchIntentResolver implements WebSearchIntentResolver {
         );
     }
 
+    /**
+     * 归一化联网模式；旧版布尔字段只作为没有 webSearchMode 时的兼容兜底。
+     */
     private String normalizeMode(String webSearchMode, Boolean enableWebSearch) {
         if (StringUtils.hasText(webSearchMode)) {
             String normalizedMode = webSearchMode.trim().toLowerCase(Locale.ROOT);
@@ -71,6 +87,9 @@ public class DefaultWebSearchIntentResolver implements WebSearchIntentResolver {
         return MODE_DISABLED;
     }
 
+    /**
+     * 按优先级扫描 auto 规则，命中后立即返回。
+     */
     private WebSearchIntentRule matchAutoRule(String content) {
         if (!StringUtils.hasText(content)) {
             return null;
@@ -84,6 +103,9 @@ public class DefaultWebSearchIntentResolver implements WebSearchIntentResolver {
         return null;
     }
 
+    /**
+     * 构造第一版自动判断规则表，后续扩展只需要新增规则并设置优先级。
+     */
     private static List<WebSearchIntentRule> buildAutoRules() {
         List<WebSearchIntentRule> rules = new ArrayList<>();
         rules.add(new WebSearchIntentRule(
@@ -160,6 +182,9 @@ public class DefaultWebSearchIntentResolver implements WebSearchIntentResolver {
         return Collections.unmodifiableList(rules);
     }
 
+    /**
+     * 把规则表达式编译成大小写不敏感的正则，提高运行时匹配效率。
+     */
     private static List<Pattern> toPatterns(String... expressions) {
         List<Pattern> patterns = new ArrayList<>();
         for (String expression : expressions) {
@@ -168,14 +193,25 @@ public class DefaultWebSearchIntentResolver implements WebSearchIntentResolver {
         return patterns;
     }
 
+    /**
+     * 自动判断规则项，包含规则身份、动作、优先级和匹配表达式。
+     */
     private static class WebSearchIntentRule {
 
+        /** 规则唯一标识，写入日志和 metadata。 */
         private final String id;
+        /** 规则展示名，用于排障和后续前端提示。 */
         private final String label;
+        /** 规则动作：enable 或 disable。 */
         private final String action;
+        /** 规则优先级，数值越大越先匹配。 */
         private final int priority;
+        /** 规则命中的正则表达式列表。 */
         private final List<Pattern> patterns;
 
+        /**
+         * 创建一条自动判断规则。
+         */
         private WebSearchIntentRule(String id, String label, String action, int priority, List<Pattern> patterns) {
             this.id = id;
             this.label = label;
@@ -200,6 +236,9 @@ public class DefaultWebSearchIntentResolver implements WebSearchIntentResolver {
             return priority;
         }
 
+        /**
+         * 判断用户内容是否命中当前规则任意表达式。
+         */
         private boolean matches(String content) {
             for (Pattern pattern : patterns) {
                 if (pattern.matcher(content).find()) {

@@ -1,5 +1,6 @@
 package com.example.aichat.modules.chat.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.aichat.common.enums.ErrorCode;
 import com.example.aichat.common.enums.ChatRoleEnum;
 import com.example.aichat.common.enums.MessageStatusEnum;
@@ -27,8 +28,11 @@ import com.example.aichat.modules.chat.mapper.ChatMessageMapper;
 import com.example.aichat.modules.chat.mapper.ChatSessionMapper;
 import com.example.aichat.modules.chat.service.ChatMessageService;
 import com.example.aichat.modules.chat.service.ChatPromptResolver;
+import com.example.aichat.modules.chat.service.WebSearchContext;
 import com.example.aichat.modules.chat.service.WebSearchIntentResolution;
 import com.example.aichat.modules.chat.service.WebSearchIntentResolver;
+import com.example.aichat.modules.chat.service.WebSearchResultItem;
+import com.example.aichat.modules.chat.service.WebSearchService;
 import com.example.aichat.modules.chat.vo.ChatMessageItemVO;
 import com.example.aichat.modules.chat.vo.ChatMessageListVO;
 import com.example.aichat.modules.file.service.FileAssetService;
@@ -64,6 +68,10 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private static final int PARTIAL_CONTENT_FLUSH_CHARS = 160;
     private static final long PARTIAL_CONTENT_FLUSH_INTERVAL_MS = 1500L;
     private static final int RESUME_PREFIX_MAX_LENGTH = 2000;
+    /** 自动会话标题最长保留字符数，避免左侧列表标题过长。 */
+    private static final int AUTO_SESSION_TITLE_MAX_LENGTH = 30;
+    /** 只有这些默认标题会被首条用户消息自动替换，保护用户手动改过的标题。 */
+    private static final Set<String> DEFAULT_SESSION_TITLES = Set.of("新会话", "New Chat", "新对话");
     private static final Logger log = LoggerFactory.getLogger(ChatMessageServiceImpl.class);
 
     private final ChatPromptResolver chatPromptResolver;
@@ -77,6 +85,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private final ObjectMapper objectMapper;
     private final DeepSeekProperties deepSeekProperties;
     private final WebSearchIntentResolver webSearchIntentResolver;
+    /** 联网搜索领域服务，负责搜索执行、摘要构造和上下文返回。 */
+    private final WebSearchService webSearchService;
 
     public ChatMessageServiceImpl(
             ChatPromptResolver chatPromptResolver,
@@ -89,7 +99,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             UserTokenUsageMapper userTokenUsageMapper,
             ObjectMapper objectMapper,
             DeepSeekProperties deepSeekProperties,
-            WebSearchIntentResolver webSearchIntentResolver
+            WebSearchIntentResolver webSearchIntentResolver,
+            WebSearchService webSearchService
     ) {
         this.chatPromptResolver = chatPromptResolver;
         this.chatSessionMapper = chatSessionMapper;
@@ -102,6 +113,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         this.objectMapper = objectMapper;
         this.deepSeekProperties = deepSeekProperties;
         this.webSearchIntentResolver = webSearchIntentResolver;
+        this.webSearchService = webSearchService;
     }
 
     @Override
@@ -161,6 +173,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 session.getSystemPrompt(),
                 request.getSystemPrompt()
         );
+        // 后端统一执行意图判定后的搜索，前端只负责传 mode，不参与搜索规则和供应商调用。
+        WebSearchContext webSearchContext = webSearchService.search(request.getContent(), webSearchResolution);
+        finalPrompt = appendWebSearchPrompt(finalPrompt, webSearchContext);
 
         // 在用户新消息入库前构造模型请求，使本次模型上下文只包含已存在的历史消息；
         // 当前用户输入通过 userContent 单独传给模型客户端，避免在 messages 中重复出现。
@@ -171,6 +186,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         ChatMessageDO userMessage = buildUserMessage(userId, session.getId(), request.getContent(), attachments, nextSeqNo);
         // 用户消息先落库，保证即使后续模型调用失败，历史里也能保留用户实际发出的内容。
         chatMessageMapper.insert(userMessage);
+        // 首条消息发送后，用用户真实问题替换默认标题，降低左侧会话列表里多个“新会话”的识别成本。
+        autoUpdateDefaultSessionTitle(session, userMessage.getContent(), nextSeqNo);
         // 更新会话最后活跃时间，列表页可以立刻按最新发送行为排序。
         chatSessionMapper.updateLastMessageAt(session.getId(), LocalDateTime.now());
         log.info(
@@ -188,6 +205,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         );
 
         ChatMessageDO assistantMessage = buildAssistantPlaceholder(userId, session.getId(), model, nextSeqNo + 1);
+        // assistant metadata 记录搜索上下文，刷新列表和中断后继续生成都从这里复用。
+        assistantMessage.setMetadata(buildAssistantMessageMetadata(webSearchContext));
         // assistant 的占位消息、模型流式调用、SSE 增量推送和最终 token/日志回写都在异步流程里完成。
         streamAssistantAnswer(
                 userId,
@@ -229,6 +248,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 session.getSystemPrompt(),
                 null
         );
+        // 继续生成不重新搜索，避免同一条回答前后引用来源变化。
+        basePrompt = appendWebSearchPrompt(basePrompt, parseWebSearchContext(assistantMessage.getMetadata()));
         ChatModelRequest modelRequest = buildResumeModelRequest(
                 session,
                 model,
@@ -292,7 +313,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 } else {
                     chatMessageMapper.updateById(assistantMessage);
                 }
-                sendStart(session.getId(), assistantMessage.getId(), model, emitter);
+                sendStart(session.getId(), assistantMessage, model, emitter);
 
                 ChatModelClient chatModelClient = chatModelClientRegistry.resolve(modelRequest);
                 clientCode = chatModelClient.clientCode();
@@ -432,14 +453,24 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         });
     }
 
-    private void sendStart(Long sessionId, Long messageId, ModelConfigDO model, SseEmitter emitter) throws Exception {
+    /**
+     * 推送流式开始事件，并把本次联网搜索状态同步给前端用于即时回显。
+     */
+    private void sendStart(Long sessionId, ChatMessageDO assistantMessage, ModelConfigDO model, SseEmitter emitter) throws Exception {
         ChatStreamStartEvent startEvent = new ChatStreamStartEvent();
         startEvent.setSessionId(sessionId);
-        startEvent.setMessageId(messageId);
+        startEvent.setMessageId(assistantMessage.getId());
         startEvent.setRole(ChatRoleEnum.ASSISTANT.getCode());
         startEvent.setModelId(model == null ? null : model.getId());
         startEvent.setModelCode(model == null ? null : model.getModelCode());
         startEvent.setModelName(model == null ? null : model.getModelName());
+        // 新消息在刷新列表前也需要知道联网状态，因此从占位消息 metadata 解析并放进 start event。
+        WebSearchContext webSearchContext = parseWebSearchContext(assistantMessage.getMetadata());
+        if (webSearchContext != null) {
+            startEvent.setWebSearchEnabled(webSearchContext.isEnabled());
+            startEvent.setWebSearchExecuted(webSearchContext.isExecuted());
+            startEvent.setWebSearchStatus(webSearchContext.getStatus());
+        }
         emitter.send(SseEmitter.event().name("message_start").data(startEvent));
     }
 
@@ -488,6 +519,48 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private int nextSeqNo(Long sessionId) {
         Integer current = chatMessageMapper.selectMaxSeqNo(sessionId);
         return current == null ? 1 : current + 1;
+    }
+
+    /**
+     * 当会话仍是默认标题且当前消息是首条用户消息时，自动用用户消息生成会话标题。
+     */
+    private void autoUpdateDefaultSessionTitle(ChatSessionDO session, String userContent, int userSeqNo) {
+        if (session == null || userSeqNo != 1 || !isDefaultSessionTitle(session.getTitle()) || !StringUtils.hasText(userContent)) {
+            return;
+        }
+
+        String autoTitle = buildAutoSessionTitle(userContent);
+        if (!StringUtils.hasText(autoTitle)) {
+            return;
+        }
+
+        LambdaUpdateWrapper<ChatSessionDO> wrapper = new LambdaUpdateWrapper<>();
+        wrapper.eq(ChatSessionDO::getId, session.getId())
+                .in(ChatSessionDO::getTitle, DEFAULT_SESSION_TITLES)
+                .set(ChatSessionDO::getTitle, autoTitle);
+        int updatedRows = chatSessionMapper.update(null, wrapper);
+        if (updatedRows > 0) {
+            session.setTitle(autoTitle);
+            log.info("Auto updated chat session title sessionId={} titleLength={}", session.getId(), autoTitle.length());
+        }
+    }
+
+    /**
+     * 判断会话标题是否仍为系统默认值，非默认标题视为用户或历史逻辑已经明确命名。
+     */
+    private boolean isDefaultSessionTitle(String title) {
+        return StringUtils.hasText(title) && DEFAULT_SESSION_TITLES.contains(title.trim());
+    }
+
+    /**
+     * 从用户首条消息生成短标题，保留原意但裁剪过长内容。
+     */
+    private String buildAutoSessionTitle(String content) {
+        String normalized = content.trim().replaceAll("\\s+", " ");
+        if (normalized.length() <= AUTO_SESSION_TITLE_MAX_LENGTH) {
+            return normalized;
+        }
+        return normalized.substring(0, AUTO_SESSION_TITLE_MAX_LENGTH) + "...";
     }
 
     private ChatMessageDO buildUserMessage(
@@ -617,6 +690,27 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         prompt.append("不要重复已经输出的内容，不要重新开头，不要改写前文语气。\n");
         prompt.append("已生成前缀：\n");
         prompt.append(extractResumePrefix(assistantContent));
+        return prompt.toString();
+    }
+
+    /**
+     * 将搜索摘要追加到系统提示词中，让模型基于同一份联网资料回答。
+     */
+    private String appendWebSearchPrompt(String basePrompt, WebSearchContext webSearchContext) {
+        if (webSearchContext == null
+                || !webSearchContext.isExecuted()
+                || !StringUtils.hasText(webSearchContext.getSummary())) {
+            return basePrompt;
+        }
+
+        StringBuilder prompt = new StringBuilder();
+        if (StringUtils.hasText(basePrompt)) {
+            prompt.append(basePrompt.trim()).append("\n\n");
+        }
+        // 单独标出搜索资料边界，降低模型把来源文本和用户问题混在一起的概率。
+        prompt.append("联网搜索参考资料：\n");
+        prompt.append("以下资料来自本次联网搜索。回答时请优先参考这些资料；如果资料不足或互相矛盾，请直接说明限制，不要编造来源。\n\n");
+        prompt.append(webSearchContext.getSummary().trim());
         return prompt.toString();
     }
 
@@ -965,6 +1059,13 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         item.setCompletionTokens(message.getCompletionTokens());
         item.setTotalTokens(message.getTotalTokens());
         item.setAttachments(parseMessageAttachments(message.getMetadata()));
+        // 只把列表展示需要的搜索状态透出，完整搜索结果仍保留在 metadata 里。
+        WebSearchContext webSearchContext = parseWebSearchContext(message.getMetadata());
+        if (webSearchContext != null) {
+            item.setWebSearchEnabled(webSearchContext.isEnabled());
+            item.setWebSearchExecuted(webSearchContext.isExecuted());
+            item.setWebSearchStatus(webSearchContext.getStatus());
+        }
         item.setCreatedAt(message.getCreatedAt());
 
         if (message.getModelId() != null) {
@@ -987,6 +1088,76 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         return toJsonSafely(metadata);
     }
 
+    /**
+     * 构造 assistant 消息扩展元数据，持久化搜索模式、规则、摘要和来源列表。
+     */
+    private String buildAssistantMessageMetadata(WebSearchContext webSearchContext) {
+        if (webSearchContext == null) {
+            return null;
+        }
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        // 状态字段用于轻量回显；summary/results 用于继续生成时复用上下文。
+        metadata.put("webSearchEnabled", webSearchContext.isEnabled());
+        metadata.put("webSearchExecuted", webSearchContext.isExecuted());
+        metadata.put("webSearchStatus", webSearchContext.getStatus());
+        metadata.put("webSearchMode", webSearchContext.getMode());
+        metadata.put("webSearchRuleId", webSearchContext.getRuleId());
+        metadata.put("webSearchRuleLabel", webSearchContext.getRuleLabel());
+        metadata.put("webSearchQuery", webSearchContext.getQuery());
+        if (StringUtils.hasText(webSearchContext.getSummary())) {
+            metadata.put("webSearchSummary", webSearchContext.getSummary());
+        }
+        if (webSearchContext.getResults() != null && !webSearchContext.getResults().isEmpty()) {
+            metadata.put("webSearchResults", webSearchContext.getResults());
+        }
+        if (StringUtils.hasText(webSearchContext.getErrorCode())) {
+            metadata.put("webSearchErrorCode", webSearchContext.getErrorCode());
+        }
+        if (StringUtils.hasText(webSearchContext.getErrorMessage())) {
+            metadata.put("webSearchErrorMessage", webSearchContext.getErrorMessage());
+        }
+        return toJsonSafely(metadata);
+    }
+
+    /**
+     * 从 assistant metadata 中恢复联网搜索上下文，供列表回显和 regenerate 复用。
+     */
+    private WebSearchContext parseWebSearchContext(String metadata) {
+        if (!StringUtils.hasText(metadata)) {
+            return null;
+        }
+        try {
+            Map<String, Object> payload = objectMapper.readValue(metadata, new TypeReference<>() {});
+            if (!payload.containsKey("webSearchEnabled")) {
+                return null;
+            }
+
+            // metadata 是长期扩展位，解析时按宽松类型处理以兼容历史数据。
+            WebSearchContext context = new WebSearchContext();
+            context.setEnabled(metadataBoolean(payload.get("webSearchEnabled")));
+            context.setExecuted(metadataBoolean(payload.get("webSearchExecuted")));
+            context.setStatus(metadataText(payload.get("webSearchStatus")));
+            context.setMode(metadataText(payload.get("webSearchMode")));
+            context.setRuleId(metadataText(payload.get("webSearchRuleId")));
+            context.setRuleLabel(metadataText(payload.get("webSearchRuleLabel")));
+            context.setQuery(metadataText(payload.get("webSearchQuery")));
+            context.setSummary(metadataText(payload.get("webSearchSummary")));
+            context.setErrorCode(metadataText(payload.get("webSearchErrorCode")));
+            context.setErrorMessage(metadataText(payload.get("webSearchErrorMessage")));
+
+            Object results = payload.get("webSearchResults");
+            if (results != null) {
+                // 结果列表完整保存在 metadata 中，继续生成时不再触发新的外部搜索。
+                context.setResults(objectMapper.convertValue(results, new TypeReference<List<WebSearchResultItem>>() {}));
+            }
+            return context;
+        } catch (Exception exception) {
+            log.warn("Failed to parse chat message web search metadata", exception);
+            return null;
+        }
+    }
+
     private List<FileAssetItemVO> parseMessageAttachments(String metadata) {
         if (!StringUtils.hasText(metadata)) {
             return List.of();
@@ -1002,5 +1173,29 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             log.warn("Failed to parse chat message attachments metadata", exception);
             return List.of();
         }
+    }
+
+    /**
+     * 宽松解析 metadata 中的布尔值，兼容 JSON boolean 和字符串形式。
+     */
+    private boolean metadataBoolean(Object value) {
+        if (value instanceof Boolean booleanValue) {
+            return booleanValue;
+        }
+        if (value == null) {
+            return false;
+        }
+        return Boolean.parseBoolean(String.valueOf(value));
+    }
+
+    /**
+     * 宽松解析 metadata 中的文本值，空字符串统一折算为 null。
+     */
+    private String metadataText(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return StringUtils.hasText(text) ? text : null;
     }
 }

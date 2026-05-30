@@ -19,6 +19,15 @@
         LIMIT #{limit}
     </select>
 
+    <select id="selectFirstUserMessage" resultType="com.example.aichat.modules.chat.entity.ChatMessageDO">
+        SELECT *
+        FROM chat_message
+        WHERE session_id = #{sessionId}
+          AND role = 'user'
+        ORDER BY seq_no ASC
+        LIMIT 1
+    </select>
+
     <select id="selectLatestMessagesBeforeSeqNo" resultType="com.example.aichat.modules.chat.entity.ChatMessageDO">
         SELECT *
         FROM chat_message

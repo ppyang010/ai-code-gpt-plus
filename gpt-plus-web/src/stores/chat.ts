@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import {
   DEFAULT_CHAT_MODEL,
@@ -29,10 +29,19 @@ import type {
   WebSearchMode,
 } from '@/types/chat'
 
+type ChatModeCode = 'quick' | 'expert'
+
 export interface SessionPreview {
   id: number
+  /** 后端保存的原始标题，编辑弹窗使用它，避免把第一问摘要误当成用户标题提交。 */
   title: string
-  modeCode: 'quick' | 'expert'
+  /** 页面展示标题；当原始标题还是默认值时，用首条用户问题摘要兜底提升列表可识别性。 */
+  displayTitle: string
+  /** 后端返回的最近消息摘要，保留给后续列表副标题或预览使用。 */
+  lastMessagePreview: string | null
+  /** 首条用户问题摘要，默认标题兜底只使用它，避免展示 assistant 回答摘要。 */
+  firstUserMessagePreview: string | null
+  modeCode: ChatModeCode
   updatedAt: string
   updatedAtRaw: string
   defaultModelId: number | null
@@ -48,11 +57,20 @@ export interface ChatMessage {
   createdAt: string
   status?: 'streaming' | 'done' | 'error' | 'interrupted'
   attachments?: FileAssetItem[]
+  /** 当前消息是否被后端判定为联网搜索回答。 */
+  webSearchEnabled?: boolean
+  /** 当前消息是否已经真实执行过搜索。 */
+  webSearchExecuted?: boolean
+  /** 当前消息的联网搜索状态，用于页面轻量提示。 */
+  webSearchStatus?: string | null
   retryContent?: string
   retryAttachments?: FileAssetItem[]
 }
 
 const EMPTY_SESSION_TITLE = '新会话'
+const DEFAULT_SESSION_TITLES = new Set([EMPTY_SESSION_TITLE, 'New Chat', '新对话'])
+const CHAT_MODE_STORAGE_KEY = 'gpt-plus.chat.currentMode'
+const CHAT_MODEL_STORAGE_KEY = 'gpt-plus.chat.currentModel'
 const MESSAGE_STATUS_FAILED = 0
 const MESSAGE_STATUS_INTERRUPTED = 2
 const MESSAGE_STATUS_GENERATING = 3
@@ -76,10 +94,103 @@ function formatRelativeTime(value: string | null) {
   }).format(date)
 }
 
+/**
+ * 判断标题是否仍是系统默认标题，只有默认标题才会启用首条用户问题摘要兜底。
+ */
+function isDefaultSessionTitle(title: string | null | undefined) {
+  return Boolean(title?.trim() && DEFAULT_SESSION_TITLES.has(title.trim()))
+}
+
+/**
+ * 生成会话卡片展示标题：保留用户手动命名，默认标题优先展示首条用户问题摘要。
+ */
+function resolveSessionDisplayTitle(title: string | null | undefined, firstUserMessagePreview?: string | null) {
+  const normalizedTitle = title?.trim() || '未命名会话'
+  const normalizedPreview = firstUserMessagePreview?.trim()
+  if (isDefaultSessionTitle(normalizedTitle) && normalizedPreview) {
+    return normalizedPreview
+  }
+
+  return normalizedTitle
+}
+
+/**
+ * 判断浏览器中保存的模式值是否仍属于当前支持的快速/思考模式。
+ */
+function isChatModeCode(value: string | null): value is ChatModeCode {
+  return value === 'quick' || value === 'expert'
+}
+
+/**
+ * 从浏览器本地存储恢复用户上次选择的聊天模式，异常或旧值统一回落到快速模式。
+ */
+function loadStoredChatMode(): ChatModeCode {
+  if (typeof window === 'undefined') {
+    return 'quick'
+  }
+
+  try {
+    const storedMode = window.localStorage.getItem(CHAT_MODE_STORAGE_KEY)
+    return isChatModeCode(storedMode) ? storedMode : 'quick'
+  } catch {
+    return 'quick'
+  }
+}
+
+/**
+ * 将用户选择的聊天模式写入浏览器本地存储，供下次重新进入页面时恢复。
+ */
+function saveStoredChatMode(mode: ChatModeCode) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(CHAT_MODE_STORAGE_KEY, mode)
+  } catch {
+    // localStorage 可能被隐私模式或浏览器策略禁用，此时只保留当前页面内状态。
+  }
+}
+
+/**
+ * 从浏览器本地存储恢复用户上次选择的模型编码，异常或空值统一回落到默认模型。
+ */
+function loadStoredChatModel() {
+  if (typeof window === 'undefined') {
+    return DEFAULT_CHAT_MODEL.code
+  }
+
+  try {
+    return window.localStorage.getItem(CHAT_MODEL_STORAGE_KEY)?.trim() || DEFAULT_CHAT_MODEL.code
+  } catch {
+    return DEFAULT_CHAT_MODEL.code
+  }
+}
+
+/**
+ * 将用户选择的模型编码写入浏览器本地存储，供下次重新进入页面时恢复。
+ */
+function saveStoredChatModel(modelCode: string) {
+  if (typeof window === 'undefined' || !modelCode.trim()) {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(CHAT_MODEL_STORAGE_KEY, modelCode)
+  } catch {
+    // localStorage 可能被隐私模式或浏览器策略禁用，此时只保留当前页面内状态。
+  }
+}
+
 function normalizeSession(session: ChatSessionListItem): SessionPreview {
+  const rawTitle = session.title || '未命名会话'
+
   return {
     id: session.sessionId,
-    title: session.title || '未命名会话',
+    title: rawTitle,
+    displayTitle: resolveSessionDisplayTitle(rawTitle, session.firstUserMessagePreview),
+    lastMessagePreview: session.lastMessagePreview,
+    firstUserMessagePreview: session.firstUserMessagePreview,
     modeCode: session.modeCode,
     updatedAt: formatRelativeTime(session.lastMessageAt || session.createdAt),
     updatedAtRaw: session.lastMessageAt || session.createdAt,
@@ -111,6 +222,10 @@ function normalizeMessage(message: ChatMessageItem, retryContent?: string, retry
     createdAt: formatRelativeTime(message.createdAt),
     status: normalizeMessageStatus(message.status),
     attachments: message.attachments || [],
+    // 列表刷新时从后端 VO 恢复联网状态，保持页面刷新前后展示一致。
+    webSearchEnabled: message.webSearchEnabled,
+    webSearchExecuted: message.webSearchExecuted,
+    webSearchStatus: message.webSearchStatus,
     retryContent,
     retryAttachments,
   }
@@ -119,8 +234,10 @@ function normalizeMessage(message: ChatMessageItem, retryContent?: string, retry
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<SessionPreview[]>([])
   const currentSessionId = ref<number | null>(null)
-  const currentModel = ref(DEFAULT_CHAT_MODEL.code)
-  const currentMode = ref<'quick' | 'expert'>('quick')
+  // 顶部模型选择也是用户操作偏好，优先从浏览器本地存储恢复。
+  const currentModel = ref(loadStoredChatModel())
+  // 顶部快速/思考是用户操作偏好，优先从浏览器本地存储恢复，而不是被历史会话模式覆盖。
+  const currentMode = ref<ChatModeCode>(loadStoredChatMode())
   const currentWebSearchMode = ref<WebSearchMode>('auto')
   const isResponding = ref(false)
   const isBootstrapping = ref(false)
@@ -152,12 +269,22 @@ export const useChatStore = defineStore('chat', () => {
     () => findChatModelByCode(availableModels.value, currentModel.value) || firstAvailableModel(availableModels.value),
   )
 
-  function resolveSessionModel(session: Pick<SessionPreview, 'defaultModelId' | 'defaultModelCode'>) {
-    return (
-      findChatModelById(availableModels.value, session.defaultModelId) ||
-      findChatModelByCode(availableModels.value, session.defaultModelCode) ||
-      firstAvailableModel(availableModels.value)
-    )
+  watch(currentMode, (mode) => {
+    saveStoredChatMode(mode)
+  })
+
+  watch(currentModel, (modelCode) => {
+    saveStoredChatModel(modelCode)
+  })
+
+  /**
+   * 会话列表刷新后同步当前页头标题，覆盖首条消息自动改名或摘要兜底后的最新展示值。
+   */
+  function syncCurrentSessionTitleFromList() {
+    const currentSession = sessions.value.find((session) => session.id === currentSessionId.value)
+    if (currentSession) {
+      currentSessionTitle.value = currentSession.displayTitle
+    }
   }
 
   async function loadModels() {
@@ -207,6 +334,7 @@ export const useChatStore = defineStore('chat', () => {
       if (!hasCurrentSession) {
         currentSessionId.value = sessions.value[0]?.id ?? null
       }
+      syncCurrentSessionTitleFromList()
     } catch (error) {
       errorMessage.value = formatErrorMessage(error, '会话列表加载失败')
       sessions.value = []
@@ -243,14 +371,12 @@ export const useChatStore = defineStore('chat', () => {
         }
         return normalizedMessage
       })
-      currentSessionTitle.value = response.title || '未命名会话'
-      currentMode.value = response.modeCode
       const matchedSession = sessions.value.find((session) => session.id === sessionId)
-      // 消息列表接口只返回 defaultModelId，模型 code/name 优先从会话列表或模型接口缓存补齐。
-      currentModel.value = resolveSessionModel({
-        defaultModelId: response.defaultModelId ?? matchedSession?.defaultModelId ?? null,
-        defaultModelCode: matchedSession?.defaultModelCode ?? null,
-      }).code
+      // 消息列表接口不返回首条用户问题摘要，标题展示沿用会话列表的第一问兜底信息。
+      currentSessionTitle.value = resolveSessionDisplayTitle(
+        response.title || matchedSession?.title,
+        matchedSession?.firstUserMessagePreview,
+      )
     } catch (error) {
       errorMessage.value = formatErrorMessage(error, '消息列表加载失败')
       messages.value = []
@@ -276,6 +402,9 @@ export const useChatStore = defineStore('chat', () => {
       const nextSession: SessionPreview = {
         id: created.sessionId,
         title: created.title || EMPTY_SESSION_TITLE,
+        displayTitle: resolveSessionDisplayTitle(created.title || EMPTY_SESSION_TITLE),
+        lastMessagePreview: null,
+        firstUserMessagePreview: null,
         modeCode: created.modeCode,
         updatedAt: formatRelativeTime(created.createdAt),
         updatedAtRaw: created.createdAt,
@@ -288,7 +417,7 @@ export const useChatStore = defineStore('chat', () => {
       sessionTotal.value += 1
       sessionHasMore.value = sessions.value.length < sessionTotal.value
       currentSessionId.value = created.sessionId
-      currentSessionTitle.value = nextSession.title
+      currentSessionTitle.value = nextSession.displayTitle
       currentModel.value = createdModel.code
       messages.value = []
       await loadMessages(created.sessionId)
@@ -355,6 +484,10 @@ export const useChatStore = defineStore('chat', () => {
               modelName: startEvent.modelName,
               createdAt: 'streaming',
               status: 'streaming',
+              // 流式开始时立即带上联网状态，避免等刷新列表才出现提示。
+              webSearchEnabled: startEvent.webSearchEnabled,
+              webSearchExecuted: startEvent.webSearchExecuted,
+              webSearchStatus: startEvent.webSearchStatus,
             }
           : message,
       )
@@ -370,6 +503,10 @@ export const useChatStore = defineStore('chat', () => {
         modelName: startEvent.modelName,
         createdAt: 'streaming',
         status: 'streaming',
+        // 新 assistant 占位消息也要保留后端搜索状态，供 ChatView 直接展示。
+        webSearchEnabled: startEvent.webSearchEnabled,
+        webSearchExecuted: startEvent.webSearchExecuted,
+        webSearchStatus: startEvent.webSearchStatus,
         retryContent,
       },
     ]
@@ -664,12 +801,13 @@ export const useChatStore = defineStore('chat', () => {
           ? {
               ...session,
               title: trimmedTitle,
+              displayTitle: resolveSessionDisplayTitle(trimmedTitle, session.firstUserMessagePreview),
             }
           : session,
       )
 
       if (currentSessionId.value === sessionId) {
-        currentSessionTitle.value = trimmedTitle
+        currentSessionTitle.value = resolveSessionDisplayTitle(trimmedTitle, activeSession.value?.firstUserMessagePreview)
       }
       return true
     } catch (error) {
@@ -712,8 +850,6 @@ export const useChatStore = defineStore('chat', () => {
       } else {
         messages.value = []
         currentSessionTitle.value = EMPTY_SESSION_TITLE
-        currentModel.value = firstAvailableModel(availableModels.value).code
-        currentMode.value = 'quick'
       }
 
       return true

@@ -27,8 +27,10 @@ public class ChatMessageSendRequest {
     private List<Long> attachmentIds;
 
     private Boolean enableDeepThinking;
+    /** 兼容旧契约的联网搜索布尔开关；没有 webSearchMode 时作为手动开关兜底。 */
     private Boolean enableWebSearch;
 
+    /** 联网搜索三态模式：disabled / enabled / auto。 */
     @Size(max = 16, message = "length must be at most 16")
     private String webSearchMode;
 

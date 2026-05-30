@@ -36,3 +36,11 @@ app:
     upload-root: ${FILE_UPLOAD_ROOT:${user.dir}/.local-storage/files}
     public-base-path: ${FILE_PUBLIC_BASE_PATH:/api/file/content}
     max-image-size-bytes: ${FILE_MAX_IMAGE_SIZE_BYTES:5242880}
+  web-search:
+    enabled: ${WEB_SEARCH_ENABLED:false}
+    provider: ${WEB_SEARCH_PROVIDER:tavily}
+    base-url: ${WEB_SEARCH_BASE_URL:https://api.tavily.com}
+    api-key: ${WEB_SEARCH_API_KEY:}
+    max-results: ${WEB_SEARCH_MAX_RESULTS:5}
+    timeout-seconds: ${WEB_SEARCH_TIMEOUT_SECONDS:10}
+    search-depth: ${WEB_SEARCH_DEPTH:basic}

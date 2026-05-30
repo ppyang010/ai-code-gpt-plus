@@ -270,6 +270,7 @@ GET /api/chat/session/list?pageNo=1&pageSize=20
 - 左侧 session 列表需要按分页结果分批加载，避免会话增多后继续拉伸页面高度
 - 前端聊天页需要保持单屏布局：左侧 session 区、右侧消息区和底部输入区都固定在一个视口内
 - 当 session 超过当前页容量时，前端通过“继续加载”或滚动触底加载下一页，而不是让输入框被挤出视口
+- 当会话标题仍为默认标题（如 `新会话` / `New Chat`）时，前端列表优先使用 `firstUserMessagePreview` 做展示兜底，避免误用 assistant 回答摘要
 
 ### 响应 DTO
 
@@ -287,6 +288,7 @@ GET /api/chat/session/list?pageNo=1&pageSize=20
         "defaultModelCode": "deepseek-v4-flash",
         "defaultModelName": "DeepSeek V4 Flash",
         "lastMessagePreview": "可以，我先帮你拆分页面结构...",
+        "firstUserMessagePreview": "帮我写一份 Vue3 聊天页",
         "lastMessageAt": "2026-04-21 15:00:00",
         "createdAt": "2026-04-21 14:30:00"
       }
@@ -333,6 +335,12 @@ Content-Type: application/json
 | modeCode | String | 是 | `quick` / `expert`，会影响默认提示词模板 |
 | defaultModelId | Long | 否 | 默认模型 ID |
 | systemPrompt | String | 否 | 会话级附加提示词，不替代模式默认提示词 |
+
+### 默认标题策略
+
+- 创建会话时如果前端未传标题或仍传默认标题，服务端允许保存默认标题。
+- 发送首条用户消息后，如果会话标题仍为默认标题，则服务端用该用户消息内容自动生成短标题。
+- 用户已经手动改成非默认标题的会话，不再被自动标题覆盖。
 
 ### 响应 VO
 
@@ -561,24 +569,28 @@ Accept: text/event-stream
 5. 如果 `enableWebSearch = true`，先执行联网检索并拿到标准化结果摘要
 6. 根据 `modeCode` 解析模式默认提示词模板
 7. 合并模式提示词、会话级提示词、本次请求级提示词和联网搜索结果摘要
-7. 先落库用户消息
-8. 创建一条 assistant 占位消息，状态可先记为生成中
-9. 调用模型接口并逐段返回
-10. 流结束后更新 assistant 完整内容、token、finishReason
-11. 记录 `api_call_log`
-12. 记录 `user_token_usage`
-13. 更新 `chat_session.lastMessageAt`
+8. 先落库用户消息
+9. 如果当前是会话首条用户消息且会话标题仍为默认标题，则根据用户消息自动生成短标题
+10. 创建一条 assistant 占位消息，状态可先记为生成中，并把搜索上下文写入 `metadata`
+11. 调用模型接口并逐段返回
+12. 流结束后更新 assistant 完整内容、token、finishReason
+13. 记录 `api_call_log`
+14. 记录 `user_token_usage`
+15. 更新 `chat_session.lastMessageAt`
 
 ### 联网搜索第一版建议
 
 - 先抽象 `WebSearchService`，不要把具体搜索供应商直接写死在聊天 service 中
+- 第一版使用 `app.web-search.provider=tavily` 对接 Tavily Search API，通过 `WEB_SEARCH_ENABLED` 和 `WEB_SEARCH_API_KEY` 控制是否真正发起搜索
 - 第一版只要求把搜索结果摘要注入模型上下文，不要求单独做搜索结果页
 - 搜索结果建议保留：
   - 标题
   - 摘要
-  - 来源 URL
-  - 抓取时间
-- 后续如果需要前端展示引用来源，再把这些结果透给消息元数据
+  - URL
+  - 来源域名
+  - 相关性分数
+- assistant `metadata` 需保存 `webSearchEnabled`、`webSearchExecuted`、`webSearchStatus`、`webSearchSummary` 和 `webSearchResults`
+- `regenerateMessage` 不重新搜索，直接复用原 assistant message `metadata` 中的搜索摘要
 
 ---
 
@@ -894,6 +906,9 @@ package com.example.aichat.modules.chat.vo;
 import java.time.LocalDateTime;
 import lombok.Data;
 
+/**
+ * 会话列表项响应对象，承载列表展示所需的标题、模型、最近消息和首条用户问题摘要。
+ */
 @Data
 public class ChatSessionListItemVO {
 
@@ -904,6 +919,8 @@ public class ChatSessionListItemVO {
     private String defaultModelCode;
     private String defaultModelName;
     private String lastMessagePreview;
+    /** 首条用户消息摘要，用于默认标题会话的列表展示兜底，避免误用 assistant 回答摘要。 */
+    private String firstUserMessagePreview;
     private LocalDateTime lastMessageAt;
     private LocalDateTime createdAt;
 }

@@ -3,3 +3,13 @@ ai:
     base-url: https://api.deepseek.com
     api-key: your_api_key
     default-model: deepseek-v4-flash
+
+app:
+  web-search:
+    enabled: false
+    provider: tavily
+    base-url: https://api.tavily.com
+    api-key: your_tavily_api_key
+    max-results: 5
+    timeout-seconds: 10
+    search-depth: basic

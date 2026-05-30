@@ -16,6 +16,11 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageDO> {
             @Param("limit") Integer limit
     );
 
+    /**
+     * 查询会话内首条用户消息，用于默认会话标题的历史兜底展示。
+     */
+    ChatMessageDO selectFirstUserMessage(@Param("sessionId") Long sessionId);
+
     List<ChatMessageDO> selectLatestMessagesBeforeSeqNo(
             @Param("sessionId") Long sessionId,
             @Param("beforeSeqNo") Integer beforeSeqNo,
