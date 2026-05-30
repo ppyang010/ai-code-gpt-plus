@@ -27,6 +27,8 @@ import com.example.aichat.modules.chat.mapper.ChatMessageMapper;
 import com.example.aichat.modules.chat.mapper.ChatSessionMapper;
 import com.example.aichat.modules.chat.service.ChatMessageService;
 import com.example.aichat.modules.chat.service.ChatPromptResolver;
+import com.example.aichat.modules.chat.service.WebSearchIntentResolution;
+import com.example.aichat.modules.chat.service.WebSearchIntentResolver;
 import com.example.aichat.modules.chat.vo.ChatMessageItemVO;
 import com.example.aichat.modules.chat.vo.ChatMessageListVO;
 import com.example.aichat.modules.file.service.FileAssetService;
@@ -74,6 +76,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private final UserTokenUsageMapper userTokenUsageMapper;
     private final ObjectMapper objectMapper;
     private final DeepSeekProperties deepSeekProperties;
+    private final WebSearchIntentResolver webSearchIntentResolver;
 
     public ChatMessageServiceImpl(
             ChatPromptResolver chatPromptResolver,
@@ -85,7 +88,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             ApiCallLogMapper apiCallLogMapper,
             UserTokenUsageMapper userTokenUsageMapper,
             ObjectMapper objectMapper,
-            DeepSeekProperties deepSeekProperties
+            DeepSeekProperties deepSeekProperties,
+            WebSearchIntentResolver webSearchIntentResolver
     ) {
         this.chatPromptResolver = chatPromptResolver;
         this.chatSessionMapper = chatSessionMapper;
@@ -97,6 +101,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         this.userTokenUsageMapper = userTokenUsageMapper;
         this.objectMapper = objectMapper;
         this.deepSeekProperties = deepSeekProperties;
+        this.webSearchIntentResolver = webSearchIntentResolver;
     }
 
     @Override
@@ -136,6 +141,13 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         if (!StringUtils.hasText(request.getContent())) {
             throw new BizException(ErrorCode.CHAT_MESSAGE_EMPTY);
         }
+        WebSearchIntentResolution webSearchResolution = webSearchIntentResolver.resolve(
+                request.getWebSearchMode(),
+                request.getEnableWebSearch(),
+                request.getContent()
+        );
+        request.setWebSearchMode(webSearchResolution.getMode());
+        request.setEnableWebSearch(webSearchResolution.isEnabled());
 
         // 只允许向当前用户自己的有效会话发送消息；这里也会过滤已删除/非活跃会话。
         ChatSessionDO session = getActiveSession(userId, request.getSessionId());
@@ -162,14 +174,17 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         // 更新会话最后活跃时间，列表页可以立刻按最新发送行为排序。
         chatSessionMapper.updateLastMessageAt(session.getId(), LocalDateTime.now());
         log.info(
-                "Accepted chat message send userId={} sessionId={} userMessageId={} nextAssistantSeqNo={} modelId={} modelCode={} attachmentCount={}",
+                "Accepted chat message send userId={} sessionId={} userMessageId={} nextAssistantSeqNo={} modelId={} modelCode={} attachmentCount={} webSearchMode={} webSearchEnabled={} webSearchRuleId={}",
                 userId,
                 session.getId(),
                 userMessage.getId(),
                 nextSeqNo + 1,
                 model == null ? null : model.getId(),
                 model == null ? null : model.getModelCode(),
-                attachments.size()
+                attachments.size(),
+                webSearchResolution.getMode(),
+                webSearchResolution.isEnabled(),
+                webSearchResolution.getMatchedRuleId()
         );
 
         ChatMessageDO assistantMessage = buildAssistantPlaceholder(userId, session.getId(), model, nextSeqNo + 1);

@@ -26,6 +26,7 @@ import type {
   ChatStreamStartEvent,
   FileAssetItem,
   PageResponse,
+  WebSearchMode,
 } from '@/types/chat'
 
 export interface SessionPreview {
@@ -120,6 +121,7 @@ export const useChatStore = defineStore('chat', () => {
   const currentSessionId = ref<number | null>(null)
   const currentModel = ref(DEFAULT_CHAT_MODEL.code)
   const currentMode = ref<'quick' | 'expert'>('quick')
+  const currentWebSearchMode = ref<WebSearchMode>('auto')
   const isResponding = ref(false)
   const isBootstrapping = ref(false)
   const isSessionsLoading = ref(false)
@@ -554,6 +556,9 @@ export const useChatStore = defineStore('chat', () => {
         activeSession.value?.defaultModelId ??
         DEFAULT_CHAT_MODEL.id,
       attachmentIds,
+      enableWebSearch:
+        currentWebSearchMode.value === 'enabled' ? true : currentWebSearchMode.value === 'disabled' ? false : undefined,
+      webSearchMode: currentWebSearchMode.value,
     }
 
     return streamAssistantResponse({
@@ -727,6 +732,7 @@ export const useChatStore = defineStore('chat', () => {
     clearErrorMessage,
     createSession,
     currentMode,
+    currentWebSearchMode,
     currentModel,
     currentSessionId,
     currentSessionTitle,

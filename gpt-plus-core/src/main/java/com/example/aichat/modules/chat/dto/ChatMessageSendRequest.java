@@ -28,5 +28,9 @@ public class ChatMessageSendRequest {
 
     private Boolean enableDeepThinking;
     private Boolean enableWebSearch;
+
+    @Size(max = 16, message = "length must be at most 16")
+    private String webSearchMode;
+
     private Long regenerateMessageId;
 }

@@ -532,6 +532,7 @@ Accept: text/event-stream
   "attachmentIds": [3001],
   "enableDeepThinking": false,
   "enableWebSearch": false,
+  "webSearchMode": "auto",
   "regenerateMessageId": null
 }
 ```
@@ -548,6 +549,7 @@ Accept: text/event-stream
 | attachmentIds | List<Long> | 否 | 已上传附件 ID 列表，支持图片附件，按用户选择顺序传入 |
 | enableDeepThinking | Boolean | 否 | 预留字段 |
 | enableWebSearch | Boolean | 否 | 是否启用联网搜索；开启后服务端需先检索，再把结果摘要注入模型上下文 |
+| webSearchMode | String | 否 | 联网搜索模式：`disabled` / `enabled` / `auto`；由后端按 `webSearchMode + content` 统一折算为最终 `enableWebSearch` |
 | regenerateMessageId | Long | 否 | 若是重新生成，传上一条 assistant 消息 ID |
 
 ### 服务端建议处理流程
@@ -555,9 +557,10 @@ Accept: text/event-stream
 1. 校验 `sessionId` 属于当前用户
 2. 校验模型是否可用
 3. 校验 `attachmentIds` 是否都属于当前用户且已完成上传
-4. 如果 `enableWebSearch = true`，先执行联网检索并拿到标准化结果摘要
-5. 根据 `modeCode` 解析模式默认提示词模板
-6. 合并模式提示词、会话级提示词、本次请求级提示词和联网搜索结果摘要
+4. 如果 `webSearchMode = auto`，由后端按意图规则判定是否需要联网，再折算为 `enableWebSearch`
+5. 如果 `enableWebSearch = true`，先执行联网检索并拿到标准化结果摘要
+6. 根据 `modeCode` 解析模式默认提示词模板
+7. 合并模式提示词、会话级提示词、本次请求级提示词和联网搜索结果摘要
 7. 先落库用户消息
 8. 创建一条 assistant 占位消息，状态可先记为生成中
 9. 调用模型接口并逐段返回
@@ -927,6 +930,7 @@ public class ChatMessageSendRequest {
     private List<Long> attachmentIds;
     private Boolean enableDeepThinking;
     private Boolean enableWebSearch;
+    private String webSearchMode;
     private Long regenerateMessageId;
 }
 ```

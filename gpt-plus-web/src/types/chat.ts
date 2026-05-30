@@ -4,6 +4,8 @@ export interface CommonResponse<T> {
   data: T
 }
 
+export type WebSearchMode = 'disabled' | 'enabled' | 'auto'
+
 export interface FileAssetItem {
   fileId: number
   fileName: string
@@ -103,6 +105,8 @@ export interface ChatMessageSendRequest {
   modeCode?: 'quick' | 'expert'
   systemPrompt?: string | null
   attachmentIds?: number[]
+  enableWebSearch?: boolean
+  webSearchMode?: WebSearchMode
 }
 
 export interface ChatMessageRegenerateRequest {

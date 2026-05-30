@@ -445,6 +445,13 @@ textarea {
   border: 1px solid #dcdfe6;
 }
 
+.composer__footer-prefix {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .composer__upload-button {
   border: 0;
   border-radius: 999px;
@@ -459,10 +466,18 @@ textarea {
   opacity: 0.56;
 }
 
+.composer__web-search-select {
+  min-width: 132px;
+}
+
 .composer__hint,
 .composer__mode {
   color: #86909c;
   font-size: 0.86rem;
+}
+
+.composer__hint {
+  line-height: 1.5;
 }
 
 .composer__suffix-actions {
@@ -712,6 +727,17 @@ textarea {
 
   .composer__sender {
     width: 100%;
+  }
+
+  .composer__footer-prefix,
+  .composer__suffix-actions {
+    width: 100%;
+    align-items: flex-start;
+  }
+
+  .composer__web-search-select {
+    width: 100%;
+    min-width: 0;
   }
 
   .chat-sidebar__pagination {

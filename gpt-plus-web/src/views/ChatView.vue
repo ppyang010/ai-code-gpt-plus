@@ -7,6 +7,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import type { ChatMessage, SessionPreview } from '@/stores/chat'
 import { useChatStore } from '@/stores/chat'
+import type { WebSearchMode } from '@/types/chat'
 
 const chatStore = useChatStore()
 const draftMessage = ref('')
@@ -72,12 +73,28 @@ const modeOptions = [
   { label: '快速', value: 'quick' },
   { label: '思考', value: 'expert' },
 ]
+const webSearchModeOptions = [
+  { label: '关闭', value: 'disabled' },
+  { label: '开启', value: 'enabled' },
+  { label: '自动判断', value: 'auto' },
+]
 const modelOptions = computed(() =>
   chatStore.availableModels.map((option) => ({
     label: option.label,
     value: option.code,
   })),
 )
+const webSearchHint = computed(() => {
+  if (chatStore.currentWebSearchMode === 'enabled') {
+    return '当前消息会直接按联网搜索发送'
+  }
+
+  if (chatStore.currentWebSearchMode === 'disabled') {
+    return '当前消息按普通聊天发送'
+  }
+
+  return '自动判断会在服务端根据用户意图规则决定是否联网'
+})
 const skeletonRows = [
   [
     { width: '42px', height: '42px', type: 'circle' },
@@ -145,6 +162,18 @@ function getModeLabel(modeCode: ModeCode, options?: { compact?: boolean }) {
   }
 
   return options?.compact ? '快速' : '快速模式'
+}
+
+function getWebSearchModeLabel(mode: WebSearchMode) {
+  if (mode === 'enabled') {
+    return '开启'
+  }
+
+  if (mode === 'disabled') {
+    return '关闭'
+  }
+
+  return '自动判断'
 }
 
 function getLastMessage() {
@@ -798,15 +827,24 @@ function removePendingAttachment(fileId: number) {
           @stop="handleStopClick"
         >
           <template #footer-prefix>
-            <button
-              type="button"
-              class="composer__upload-button"
-              :disabled="chatStore.isResponding || chatStore.isImageUploading"
-              @click="openImagePicker"
-            >
-              {{ chatStore.isImageUploading ? '上传中...' : '添加图片' }}
-            </button>
-            <span class="composer__hint">Ready</span>
+            <div class="composer__footer-prefix">
+              <button
+                type="button"
+                class="composer__upload-button"
+                :disabled="chatStore.isResponding || chatStore.isImageUploading"
+                @click="openImagePicker"
+              >
+                {{ chatStore.isImageUploading ? '上传中...' : '添加图片' }}
+              </button>
+              <t-select
+                v-model="chatStore.currentWebSearchMode"
+                class="composer__web-search-select"
+                size="small"
+                :disabled="chatStore.isResponding"
+                :options="webSearchModeOptions"
+              />
+              <span class="composer__hint">{{ webSearchHint }}</span>
+            </div>
           </template>
 
           <template #suffix>
@@ -833,6 +871,7 @@ function removePendingAttachment(fileId: number) {
                 <template #icon><SendIcon /></template>
               </t-button>
               <span class="composer__mode">当前模式：{{ getModeLabel(chatStore.currentMode, { compact: true }) }}</span>
+              <span class="composer__mode">联网：{{ getWebSearchModeLabel(chatStore.currentWebSearchMode) }}</span>
             </div>
           </template>
         </t-chat-sender>
