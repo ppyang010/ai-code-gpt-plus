@@ -75,6 +75,7 @@ com/example/aichat/
 | `common/model/` | 基础数据模型，例如通用 DO 基类。 |
 | `infrastructure/ai/` | 模型调用抽象层，定义统一请求、响应、流式 chunk、客户端接口和客户端注册表。 |
 | `infrastructure/ai/deepseek/` | DeepSeek 真实模型调用适配。 |
+| `infrastructure/ai/openai/` | OpenAI-compatible 通用模型供应商适配，支持配置多个兼容 `/chat/completions` 的供应商。 |
 | `infrastructure/ai/mock/` | 本地开发兜底的 mock 模型适配。 |
 | `modules/chat/` | 聊天核心业务，包含会话、消息、发送消息、SSE 流式输出、附件引用和提示词解析。 |
 | `modules/file/` | 图片附件模块，包含直传图片、文件元数据落库和图片内容读取。 |

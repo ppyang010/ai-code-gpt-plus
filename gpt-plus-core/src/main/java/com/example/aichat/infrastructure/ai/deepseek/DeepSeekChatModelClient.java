@@ -30,6 +30,9 @@ import org.springframework.util.StringUtils;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * DeepSeek 专用流式模型客户端，负责 DeepSeek 官方接口的 SSE 请求和响应解析。
+ */
 @Component
 public class DeepSeekChatModelClient implements ChatModelClient {
 
@@ -45,13 +48,22 @@ public class DeepSeekChatModelClient implements ChatModelClient {
                 .build();
     }
 
+    /**
+     * 优先按 providerCode 判断是否归属 DeepSeek；旧数据没有 providerCode 时才回退到模型前缀。
+     */
     @Override
     public boolean supports(ChatModelRequest request) {
-        if (!properties.isEnabled()) {
+        if (!this.properties.isEnabled()) {
             return false;
         }
-        if (!StringUtils.hasText(properties.getApiKey())) {
+        if (!StringUtils.hasText(this.properties.getApiKey())) {
             return false;
+        }
+        if (request == null) {
+            return false;
+        }
+        if (StringUtils.hasText(request.getProviderCode())) {
+            return "deepseek".equalsIgnoreCase(request.getProviderCode());
         }
         return StringUtils.hasText(request.getModelCode()) && request.getModelCode().startsWith("deepseek");
     }

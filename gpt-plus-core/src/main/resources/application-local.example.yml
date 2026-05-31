@@ -3,6 +3,16 @@ ai:
     base-url: https://api.deepseek.com
     api-key: your_api_key
     default-model: deepseek-v4-flash
+  openai-compatible:
+    providers:
+      openai:
+        enabled: false
+        base-url: https://api.openai.com/v1
+        api-key: your_openai_api_key
+      openrouter:
+        enabled: false
+        base-url: https://openrouter.ai/api/v1
+        api-key: your_openrouter_api_key
 
 app:
   web-search:

@@ -30,6 +30,17 @@ ai:
     base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
     api-key: ${DEEPSEEK_API_KEY:}
     default-model: ${DEEPSEEK_DEFAULT_MODEL:deepseek-v4-flash}
+  openai-compatible:
+    enabled: ${OPENAI_COMPATIBLE_ENABLED:true}
+    providers:
+      openai:
+        enabled: ${OPENAI_COMPATIBLE_OPENAI_ENABLED:false}
+        base-url: ${OPENAI_COMPATIBLE_OPENAI_BASE_URL:https://api.openai.com/v1}
+        api-key: ${OPENAI_COMPATIBLE_OPENAI_API_KEY:}
+      openrouter:
+        enabled: ${OPENAI_COMPATIBLE_OPENROUTER_ENABLED:false}
+        base-url: ${OPENAI_COMPATIBLE_OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
+        api-key: ${OPENAI_COMPATIBLE_OPENROUTER_API_KEY:}
 
 app:
   file:

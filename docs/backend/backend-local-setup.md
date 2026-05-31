@@ -76,12 +76,14 @@ mvn -version
 - `ChatModelClient`
 - `ChatModelClientRegistry`
 - `DeepSeekChatModelClient`
+- `OpenAiCompatibleChatModelClient`
 - `MockChatModelClient`
 
 当前行为如下：
 
 - 如果所选模型编码以 `deepseek` 开头，并且已配置 `DEEPSEEK_API_KEY`，则优先走 DeepSeek 客户端
 - DeepSeek 客户端当前已经改为真实 SSE 流式读取，而不是一次性非流式回包再转发
+- 如果所选模型所属 `model_provider.provider_code` 存在于 `ai.openai-compatible.providers` 配置中，则走通用 OpenAI-compatible 客户端
 - 如果没有配置 `DEEPSEEK_API_KEY`，则自动回退到 mock 客户端，保证本地开发链路可用
 
 ## DeepSeek 配置
@@ -108,6 +110,92 @@ export DEEPSEEK_DEFAULT_MODEL=deepseek-v4-flash
 
 - 可以直接验证真实 DeepSeek 流式响应
 - 发送消息成功后会同步落库 `chat_message`、`api_call_log`、`user_token_usage`
+
+## OpenAI-compatible 供应商配置
+
+新增 OpenAI、OpenRouter、SiliconFlow、Moonshot 等兼容 `/chat/completions` 流式协议的供应商时，需要同时准备两类配置：
+
+- 数据库 `model_provider` / `model_config`：负责模型列表展示、模型能力字段和模型所属供应商
+- 本地配置或环境变量：负责真实调用所需的 `base-url` / `api-key`，避免把密钥写入 Git
+
+本地配置示例：
+
+```yaml
+ai:
+  openai-compatible:
+    providers:
+      openai:
+        enabled: true
+        base-url: https://api.openai.com/v1
+        api-key: your_openai_api_key
+      openrouter:
+        enabled: true
+        base-url: https://openrouter.ai/api/v1
+        api-key: your_openrouter_api_key
+```
+
+环境变量示例：
+
+```bash
+export OPENAI_COMPATIBLE_OPENAI_API_KEY=your_openai_api_key
+export OPENAI_COMPATIBLE_OPENAI_BASE_URL=https://api.openai.com/v1
+export OPENAI_COMPATIBLE_OPENROUTER_API_KEY=your_openrouter_api_key
+export OPENAI_COMPATIBLE_OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+注意：
+
+- 配置项中的 `openai` / `openrouter` 必须和 `model_provider.provider_code` 保持一致
+- 通用客户端默认拼接 `{base-url}/chat/completions`
+- 真实 API Key 只应写入本地忽略文件或环境变量，不要写入可提交文件
+
+模型数据示例：
+
+```sql
+INSERT INTO model_provider (provider_code, provider_name, base_url, status, sort_no, remark)
+VALUES ('openai', 'OpenAI', 'https://api.openai.com/v1', 1, 20, 'OpenAI-compatible provider')
+ON DUPLICATE KEY UPDATE
+  provider_name = VALUES(provider_name),
+  base_url = VALUES(base_url),
+  status = VALUES(status),
+  sort_no = VALUES(sort_no);
+
+INSERT INTO model_config (
+  provider_id,
+  model_code,
+  model_name,
+  model_type,
+  support_stream,
+  support_thinking,
+  support_json_output,
+  support_vision,
+  support_file,
+  context_window,
+  max_output_tokens,
+  status,
+  sort_no
+)
+SELECT
+  id,
+  'gpt-4o-mini',
+  'GPT-4o mini',
+  'chat',
+  1,
+  0,
+  1,
+  1,
+  0,
+  128000,
+  16384,
+  1,
+  20
+FROM model_provider
+WHERE provider_code = 'openai'
+ON DUPLICATE KEY UPDATE
+  model_name = VALUES(model_name),
+  status = VALUES(status),
+  sort_no = VALUES(sort_no);
+```
 
 ## 当前本地模型初始化约定
 

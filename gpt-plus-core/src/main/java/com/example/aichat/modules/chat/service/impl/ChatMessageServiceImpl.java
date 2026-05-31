@@ -39,8 +39,10 @@ import com.example.aichat.modules.file.service.FileAssetService;
 import com.example.aichat.modules.file.vo.FileAssetItemVO;
 import com.example.aichat.modules.model.entity.ApiCallLogDO;
 import com.example.aichat.modules.model.entity.ModelConfigDO;
+import com.example.aichat.modules.model.entity.ModelProviderDO;
 import com.example.aichat.modules.model.mapper.ApiCallLogMapper;
 import com.example.aichat.modules.model.mapper.ModelConfigMapper;
+import com.example.aichat.modules.model.mapper.ModelProviderMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -60,6 +62,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * 聊天消息核心服务，负责消息落库、模型请求组装、SSE 推送和模型调用日志写入。
+ */
 @Service
 public class ChatMessageServiceImpl implements ChatMessageService {
 
@@ -78,6 +83,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private final ChatSessionMapper chatSessionMapper;
     private final ChatMessageMapper chatMessageMapper;
     private final ModelConfigMapper modelConfigMapper;
+    /** 模型供应商读取器，用于把模型配置解析成真实客户端可识别的 providerCode。 */
+    private final ModelProviderMapper modelProviderMapper;
     private final FileAssetService fileAssetService;
     private final ChatModelClientRegistry chatModelClientRegistry;
     private final ApiCallLogMapper apiCallLogMapper;
@@ -93,6 +100,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             ChatSessionMapper chatSessionMapper,
             ChatMessageMapper chatMessageMapper,
             ModelConfigMapper modelConfigMapper,
+            ModelProviderMapper modelProviderMapper,
             FileAssetService fileAssetService,
             ChatModelClientRegistry chatModelClientRegistry,
             ApiCallLogMapper apiCallLogMapper,
@@ -106,6 +114,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         this.chatSessionMapper = chatSessionMapper;
         this.chatMessageMapper = chatMessageMapper;
         this.modelConfigMapper = modelConfigMapper;
+        this.modelProviderMapper = modelProviderMapper;
         this.fileAssetService = fileAssetService;
         this.chatModelClientRegistry = chatModelClientRegistry;
         this.apiCallLogMapper = apiCallLogMapper;
@@ -610,6 +619,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         assistantMessage.setTotalTokens(0);
     }
 
+    /**
+     * 构造普通发送场景的模型请求，并补齐模型所属供应商上下文。
+     */
     private ChatModelRequest buildModelRequest(
             ChatSessionDO session,
             ModelConfigDO model,
@@ -617,16 +629,20 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             String finalPrompt,
             String requestModeCode
     ) {
-        return buildModelRequest(
+        return this.buildModelRequest(
                 session,
                 model,
+                this.resolveProvider(model),
                 userContent,
                 finalPrompt,
                 requestModeCode,
-                loadContextMessages(session.getId(), CONTEXT_MESSAGE_LIMIT)
+                this.loadContextMessages(session.getId(), CONTEXT_MESSAGE_LIMIT)
         );
     }
 
+    /**
+     * 构造继续生成场景的模型请求，并复用原中断回答之前的上下文。
+     */
     private ChatModelRequest buildResumeModelRequest(
             ChatSessionDO session,
             ModelConfigDO model,
@@ -635,20 +651,25 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             String requestModeCode,
             ChatMessageDO interruptedAssistantMessage
     ) {
-        String resumePrompt = buildResumePrompt(basePrompt, interruptedAssistantMessage.getContent());
-        return buildModelRequest(
+        String resumePrompt = this.buildResumePrompt(basePrompt, interruptedAssistantMessage.getContent());
+        return this.buildModelRequest(
                 session,
                 model,
+                this.resolveProvider(model),
                 userContent,
                 resumePrompt,
                 requestModeCode,
-                loadContextMessagesBeforeSeqNo(session.getId(), interruptedAssistantMessage.getSeqNo(), CONTEXT_MESSAGE_LIMIT)
+                this.loadContextMessagesBeforeSeqNo(session.getId(), interruptedAssistantMessage.getSeqNo(), CONTEXT_MESSAGE_LIMIT)
         );
     }
 
+    /**
+     * 把会话、模型、供应商和上下文消息合并成统一模型请求对象。
+     */
     private ChatModelRequest buildModelRequest(
             ChatSessionDO session,
             ModelConfigDO model,
+            ModelProviderDO provider,
             String userContent,
             String finalPrompt,
             String requestModeCode,
@@ -659,11 +680,31 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         request.setModelId(model == null ? null : model.getId());
         request.setModelCode(model == null ? null : model.getModelCode());
         request.setModelName(model == null ? null : model.getModelName());
+        // provider 信息由服务端按模型配置解析，前端只传 modelId，避免客户端伪造供应商路由。
+        request.setProviderId(provider == null ? null : provider.getId());
+        request.setProviderCode(provider == null ? null : provider.getProviderCode());
+        request.setProviderName(provider == null ? null : provider.getProviderName());
+        request.setProviderBaseUrl(provider == null ? null : provider.getBaseUrl());
         request.setModeCode(requestModeCode != null ? requestModeCode : session.getModeCode());
         request.setSystemPrompt(finalPrompt);
         request.setUserContent(userContent);
         request.setMessages(contextMessages);
         return request;
+    }
+
+    /**
+     * 根据模型配置读取启用供应商，确保后续客户端注册表能按 providerCode 选择真实适配器。
+     */
+    private ModelProviderDO resolveProvider(ModelConfigDO model) {
+        if (model == null || model.getProviderId() == null) {
+            return null;
+        }
+
+        ModelProviderDO provider = this.modelProviderMapper.selectById(model.getProviderId());
+        if (provider == null || !Objects.equals(provider.getStatus(), 1)) {
+            throw new BizException(ErrorCode.CHAT_MODEL_NOT_FOUND, "模型供应商不存在或未启用");
+        }
+        return provider;
     }
 
     private List<ChatModelMessage> loadContextMessages(Long sessionId, int limit) {
