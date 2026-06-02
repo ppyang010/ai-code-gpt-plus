@@ -1,6 +1,7 @@
 package com.example.aichat.modules.chat.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.example.aichat.common.enums.ChatModeEnum;
 import com.example.aichat.common.enums.ErrorCode;
 import com.example.aichat.common.enums.ChatRoleEnum;
 import com.example.aichat.common.enums.MessageStatusEnum;
@@ -21,6 +22,7 @@ import com.example.aichat.modules.chat.dto.ChatMessageSendRequest;
 import com.example.aichat.modules.chat.dto.stream.ChatStreamDeltaEvent;
 import com.example.aichat.modules.chat.dto.stream.ChatStreamEndEvent;
 import com.example.aichat.modules.chat.dto.stream.ChatStreamErrorEvent;
+import com.example.aichat.modules.chat.dto.stream.ChatStreamReasoningDeltaEvent;
 import com.example.aichat.modules.chat.dto.stream.ChatStreamStartEvent;
 import com.example.aichat.modules.chat.entity.ChatMessageDO;
 import com.example.aichat.modules.chat.entity.ChatSessionDO;
@@ -171,53 +173,73 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         request.setEnableWebSearch(webSearchResolution.isEnabled());
 
         // 只允许向当前用户自己的有效会话发送消息；这里也会过滤已删除/非活跃会话。
-        ChatSessionDO session = getActiveSession(userId, request.getSessionId());
+        ChatSessionDO session = this.getActiveSession(userId, request.getSessionId());
         // 优先使用本次请求指定的模型；未指定时回落到会话默认模型，再由 resolveModel 做全局默认兜底。
-        ModelConfigDO model = resolveModel(session, request.getModelId());
-        List<FileAssetItemVO> attachments = fileAssetService.requireOwnedCompletedAssets(userId, request.getAttachmentIds());
+        ModelConfigDO model = this.resolveModel(session, request.getModelId());
+        List<FileAssetItemVO> attachments = this.fileAssetService.requireOwnedCompletedAssets(userId, request.getAttachmentIds());
+        // 图片附件会进一步转换为多模态 image_url 内容块，尝试真正透传给支持视觉输入的供应商。
+        List<String> userImageUrls = this.fileAssetService.buildOwnedImageDataUrls(userId, request.getAttachmentIds());
+        // 思考模式现在只表示模型原生思考开关；显式字段优先，其次按请求 mode，再回落到会话 mode。
+        Boolean enableDeepThinking = this.resolveEnableDeepThinking(
+                request.getEnableDeepThinking(),
+                request.getModeCode(),
+                session.getModeCode()
+        );
+        request.setEnableDeepThinking(enableDeepThinking);
 
-        // 本次请求的系统提示词由模式、会话和请求三层合并，保证模式切换能影响同一会话内的回答策略。
-        String finalPrompt = chatPromptResolver.resolveSystemPrompt(
-                request.getModeCode() != null ? request.getModeCode() : session.getModeCode(),
+        // 当前 quick / expert 不再切默认 prompt，只保留会话级和请求级附加提示词合并能力。
+        String finalPrompt = this.chatPromptResolver.resolveSystemPrompt(
                 session.getSystemPrompt(),
                 request.getSystemPrompt()
         );
         // 后端统一执行意图判定后的搜索，前端只负责传 mode，不参与搜索规则和供应商调用。
-        WebSearchContext webSearchContext = webSearchService.search(request.getContent(), webSearchResolution);
-        finalPrompt = appendWebSearchPrompt(finalPrompt, webSearchContext);
+        WebSearchContext webSearchContext = this.webSearchService.search(request.getContent(), webSearchResolution);
+        finalPrompt = this.appendWebSearchPrompt(finalPrompt, webSearchContext);
 
         // 在用户新消息入库前构造模型请求，使本次模型上下文只包含已存在的历史消息；
         // 当前用户输入通过 userContent 单独传给模型客户端，避免在 messages 中重复出现。
-        ChatModelRequest modelRequest = buildModelRequest(session, model, request.getContent(), finalPrompt, request.getModeCode());
+        ChatModelRequest modelRequest = this.buildModelRequest(
+                session,
+                model,
+                request.getContent(),
+                finalPrompt,
+                request.getModeCode(),
+                enableDeepThinking,
+                userImageUrls
+        );
 
         // seq_no 采用同一会话内递增序号：用户消息占当前序号，assistant 回答占下一个序号。
-        int nextSeqNo = nextSeqNo(session.getId());
-        ChatMessageDO userMessage = buildUserMessage(userId, session.getId(), request.getContent(), attachments, nextSeqNo);
+        int nextSeqNo = this.nextSeqNo(session.getId());
+        ChatMessageDO userMessage = this.buildUserMessage(userId, session.getId(), request.getContent(), attachments, nextSeqNo);
         // 用户消息先落库，保证即使后续模型调用失败，历史里也能保留用户实际发出的内容。
-        chatMessageMapper.insert(userMessage);
+        this.chatMessageMapper.insert(userMessage);
         // 首条消息发送后，用用户真实问题替换默认标题，降低左侧会话列表里多个“新会话”的识别成本。
-        autoUpdateDefaultSessionTitle(session, userMessage.getContent(), nextSeqNo);
+        this.autoUpdateDefaultSessionTitle(session, userMessage.getContent(), nextSeqNo);
         // 更新会话最后活跃时间，列表页可以立刻按最新发送行为排序。
-        chatSessionMapper.updateLastMessageAt(session.getId(), LocalDateTime.now());
+        this.chatSessionMapper.updateLastMessageAt(session.getId(), LocalDateTime.now());
         log.info(
-                "Accepted chat message send userId={} sessionId={} userMessageId={} nextAssistantSeqNo={} modelId={} modelCode={} attachmentCount={} webSearchMode={} webSearchEnabled={} webSearchRuleId={}",
+                "Accepted chat message send userId={} sessionId={} userMessageId={} nextAssistantSeqNo={} modelId={} modelCode={} enableDeepThinking={} attachmentCount={} webSearchMode={} webSearchEnabled={} webSearchRuleId={}",
                 userId,
                 session.getId(),
                 userMessage.getId(),
                 nextSeqNo + 1,
                 model == null ? null : model.getId(),
                 model == null ? null : model.getModelCode(),
+                enableDeepThinking,
                 attachments.size(),
                 webSearchResolution.getMode(),
                 webSearchResolution.isEnabled(),
                 webSearchResolution.getMatchedRuleId()
         );
 
-        ChatMessageDO assistantMessage = buildAssistantPlaceholder(userId, session.getId(), model, nextSeqNo + 1);
+        ChatMessageDO assistantMessage = this.buildAssistantPlaceholder(userId, session.getId(), model, nextSeqNo + 1);
         // assistant metadata 记录搜索上下文，刷新列表和中断后继续生成都从这里复用。
-        assistantMessage.setMetadata(buildAssistantMessageMetadata(webSearchContext));
+        assistantMessage.setMetadata(this.mergeAssistantThinkingMetadata(
+                this.buildAssistantMessageMetadata(webSearchContext),
+                enableDeepThinking
+        ));
         // assistant 的占位消息、模型流式调用、SSE 增量推送和最终 token/日志回写都在异步流程里完成。
-        streamAssistantAnswer(
+        this.streamAssistantAnswer(
                 userId,
                 session,
                 model,
@@ -238,8 +260,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             throw new BizException(ErrorCode.CHAT_MESSAGE_NOT_FOUND);
         }
 
-        ChatSessionDO session = getActiveSession(userId, request.getSessionId());
-        ChatMessageDO assistantMessage = getSessionMessage(session.getId(), request.getRegenerateMessageId());
+        ChatSessionDO session = this.getActiveSession(userId, request.getSessionId());
+        ChatMessageDO assistantMessage = this.getSessionMessage(session.getId(), request.getRegenerateMessageId());
         if (!ChatRoleEnum.ASSISTANT.getCode().equals(assistantMessage.getRole())) {
             throw new BizException(ErrorCode.CHAT_MESSAGE_NOT_INTERRUPTIBLE);
         }
@@ -250,21 +272,33 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             throw new BizException(ErrorCode.CHAT_MESSAGE_NOT_INTERRUPTIBLE);
         }
 
-        ChatMessageDO previousUserMessage = getPreviousUserMessage(session.getId(), assistantMessage.getSeqNo());
-        ModelConfigDO model = resolveModel(session, request.getModelId() != null ? request.getModelId() : assistantMessage.getModelId());
-        String basePrompt = chatPromptResolver.resolveSystemPrompt(
-                request.getModeCode() != null ? request.getModeCode() : session.getModeCode(),
+        ChatMessageDO previousUserMessage = this.getPreviousUserMessage(session.getId(), assistantMessage.getSeqNo());
+        ModelConfigDO model = this.resolveModel(session, request.getModelId() != null ? request.getModelId() : assistantMessage.getModelId());
+        List<Long> previousAttachmentIds = this.parseMessageAttachments(previousUserMessage.getMetadata()).stream()
+                .map(FileAssetItemVO::getFileId)
+                .filter(Objects::nonNull)
+                .toList();
+        List<String> userImageUrls = this.fileAssetService.buildOwnedImageDataUrls(userId, previousAttachmentIds);
+        Boolean enableDeepThinking = this.resolveEnableDeepThinking(
+                request.getEnableDeepThinking(),
+                request.getModeCode(),
+                session.getModeCode()
+        );
+        request.setEnableDeepThinking(enableDeepThinking);
+        String basePrompt = this.chatPromptResolver.resolveSystemPrompt(
                 session.getSystemPrompt(),
                 null
         );
         // 继续生成不重新搜索，避免同一条回答前后引用来源变化。
-        basePrompt = appendWebSearchPrompt(basePrompt, parseWebSearchContext(assistantMessage.getMetadata()));
-        ChatModelRequest modelRequest = buildResumeModelRequest(
+        basePrompt = this.appendWebSearchPrompt(basePrompt, this.parseWebSearchContext(assistantMessage.getMetadata()));
+        ChatModelRequest modelRequest = this.buildResumeModelRequest(
                 session,
                 model,
                 previousUserMessage.getContent(),
                 basePrompt,
                 request.getModeCode(),
+                enableDeepThinking,
+                userImageUrls,
                 assistantMessage
         );
 
@@ -278,16 +312,18 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             throw new BizException(ErrorCode.CHAT_MESSAGE_ALREADY_GENERATING);
         }
 
-        resetAssistantMessageForResume(assistantMessage, model);
+        this.resetAssistantMessageForResume(assistantMessage, model);
+        assistantMessage.setMetadata(this.mergeAssistantThinkingMetadata(assistantMessage.getMetadata(), enableDeepThinking));
         log.info(
-                "Accepted chat regenerate userId={} sessionId={} messageId={} modelId={} modelCode={}",
+                "Accepted chat regenerate userId={} sessionId={} messageId={} modelId={} modelCode={} enableDeepThinking={}",
                 userId,
                 session.getId(),
                 assistantMessage.getId(),
                 model == null ? null : model.getId(),
-                model == null ? null : model.getModelCode()
+                model == null ? null : model.getModelCode(),
+                enableDeepThinking
         );
-        streamAssistantAnswer(
+        this.streamAssistantAnswer(
                 userId,
                 session,
                 model,
@@ -312,6 +348,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         // 模型调用放到异步线程中执行，HTTP 请求线程可以尽快返回 SseEmitter 并持续推送增量事件。
         CompletableFuture.runAsync(() -> {
             StringBuilder contentBuilder = new StringBuilder(StringUtils.hasText(persistedPrefix) ? persistedPrefix : "");
+            StringBuilder reasoningBuilder = new StringBuilder(this.loadPersistedReasoningContent(assistantMessage.getMetadata()));
             long[] lastPersistedAt = {System.currentTimeMillis()};
             int[] lastPersistedLength = {contentBuilder.length()};
             String clientCode = "unknown";
@@ -344,6 +381,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                                 assistantMessage,
                                 chunk,
                                 contentBuilder,
+                                reasoningBuilder,
                                 lastPersistedAt,
                                 lastPersistedLength
                         )
@@ -351,6 +389,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
                 // 流式结束后统一回写完整正文和 token；期间的部分内容已按阈值做过增量持久化。
                 assistantMessage.setContent(contentBuilder.toString());
+                assistantMessage.setMetadata(this.mergeAssistantMessageMetadata(assistantMessage.getMetadata(), reasoningBuilder.toString()));
                 assistantMessage.setFinishReason(modelResponse.getFinishReason());
                 assistantMessage.setStatus(MessageStatusEnum.NORMAL.getCode());
                 assistantMessage.setPromptTokens(defaultInt(modelResponse.getPromptTokens()));
@@ -393,15 +432,15 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 emitter.complete();
             } catch (Exception exception) {
                 boolean clientInterrupted = isClientStreamInterrupted(exception);
-                boolean recoverableContent = hasRecoverableContent(contentBuilder);
+                boolean recoverableContent = this.hasRecoverableContent(contentBuilder, reasoningBuilder);
                 long elapsedMs = System.currentTimeMillis() - startedAt;
                 try {
                     if (clientInterrupted) {
-                        persistInterruptedMessage(assistantMessage, contentBuilder.toString());
+                        this.persistInterruptedMessage(assistantMessage, contentBuilder.toString(), reasoningBuilder.toString());
                     } else if (recoverableContent) {
-                        persistInterruptedMessage(assistantMessage, contentBuilder.toString());
+                        this.persistInterruptedMessage(assistantMessage, contentBuilder.toString(), reasoningBuilder.toString());
                     } else {
-                        persistFailedMessage(assistantMessage);
+                        this.persistFailedMessage(assistantMessage);
                     }
 
                     if (!clientInterrupted && shouldPersistFailureUsage(exception)) {
@@ -431,7 +470,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                     );
                 } else if (recoverableContent) {
                     log.warn(
-                            "Chat model stream interrupted after partial content userId={} sessionId={} messageId={} clientCode={} modelCode={} elapsedMs={} contentLength={} errorType={} errorCode={} httpStatus={}",
+                            "Chat model stream interrupted after partial content userId={} sessionId={} messageId={} clientCode={} modelCode={} elapsedMs={} contentLength={} reasoningLength={} errorType={} errorCode={} httpStatus={}",
                             userId,
                             session.getId(),
                             assistantMessage.getId(),
@@ -439,6 +478,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                             modelRequest.getModelCode(),
                             elapsedMs,
                             contentBuilder.length(),
+                            reasoningBuilder.length(),
                             exception.getClass().getSimpleName(),
                             resolveModelErrorCode(exception),
                             resolveModelHttpStatus(exception)
@@ -474,6 +514,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         startEvent.setModelCode(model == null ? null : model.getModelCode());
         startEvent.setModelName(model == null ? null : model.getModelName());
         // 新消息在刷新列表前也需要知道联网状态，因此从占位消息 metadata 解析并放进 start event。
+        startEvent.setDeepThinkingEnabled(this.metadataBoolean(this.parseMetadataPayload(assistantMessage.getMetadata()).get("deepThinkingEnabled")));
         WebSearchContext webSearchContext = parseWebSearchContext(assistantMessage.getMetadata());
         if (webSearchContext != null) {
             startEvent.setWebSearchEnabled(webSearchContext.isEnabled());
@@ -627,7 +668,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             ModelConfigDO model,
             String userContent,
             String finalPrompt,
-            String requestModeCode
+            String requestModeCode,
+            Boolean enableDeepThinking,
+            List<String> userImageUrls
     ) {
         return this.buildModelRequest(
                 session,
@@ -636,6 +679,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 userContent,
                 finalPrompt,
                 requestModeCode,
+                enableDeepThinking,
+                userImageUrls,
                 this.loadContextMessages(session.getId(), CONTEXT_MESSAGE_LIMIT)
         );
     }
@@ -649,6 +694,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             String userContent,
             String basePrompt,
             String requestModeCode,
+            Boolean enableDeepThinking,
+            List<String> userImageUrls,
             ChatMessageDO interruptedAssistantMessage
     ) {
         String resumePrompt = this.buildResumePrompt(basePrompt, interruptedAssistantMessage.getContent());
@@ -659,6 +706,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 userContent,
                 resumePrompt,
                 requestModeCode,
+                enableDeepThinking,
+                userImageUrls,
                 this.loadContextMessagesBeforeSeqNo(session.getId(), interruptedAssistantMessage.getSeqNo(), CONTEXT_MESSAGE_LIMIT)
         );
     }
@@ -673,6 +722,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             String userContent,
             String finalPrompt,
             String requestModeCode,
+            Boolean enableDeepThinking,
+            List<String> userImageUrls,
             List<ChatModelMessage> contextMessages
     ) {
         ChatModelRequest request = new ChatModelRequest();
@@ -686,10 +737,23 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         request.setProviderName(provider == null ? null : provider.getProviderName());
         request.setProviderBaseUrl(provider == null ? null : provider.getBaseUrl());
         request.setModeCode(requestModeCode != null ? requestModeCode : session.getModeCode());
+        request.setEnableDeepThinking(enableDeepThinking);
         request.setSystemPrompt(finalPrompt);
         request.setUserContent(userContent);
+        request.setUserImageUrls(userImageUrls);
         request.setMessages(contextMessages);
         return request;
+    }
+
+    /**
+     * 统一折算模型原生思考开关：显式字段优先，其次按请求 mode，再回落到会话 mode。
+     */
+    private Boolean resolveEnableDeepThinking(Boolean explicitEnableDeepThinking, String requestModeCode, String sessionModeCode) {
+        if (explicitEnableDeepThinking != null) {
+            return explicitEnableDeepThinking;
+        }
+        String effectiveModeCode = StringUtils.hasText(requestModeCode) ? requestModeCode : sessionModeCode;
+        return ChatModeEnum.EXPERT == ChatModeEnum.fromCodeOrDefault(effectiveModeCode);
     }
 
     /**
@@ -771,23 +835,35 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             ChatMessageDO assistantMessage,
             ChatModelStreamChunk chunk,
             StringBuilder contentBuilder,
+            StringBuilder reasoningBuilder,
             long[] lastPersistedAt,
             int[] lastPersistedLength
     ) {
         if (chunk == null || chunk.isDone()) {
             return;
         }
+        if (StringUtils.hasText(chunk.getReasoningDelta())) {
+            reasoningBuilder.append(chunk.getReasoningDelta());
+            ChatStreamReasoningDeltaEvent reasoningDeltaEvent = new ChatStreamReasoningDeltaEvent();
+            reasoningDeltaEvent.setMessageId(assistantMessage.getId());
+            reasoningDeltaEvent.setReasoningDelta(chunk.getReasoningDelta());
+            try {
+                emitter.send(SseEmitter.event().name("message_reasoning_delta").data(reasoningDeltaEvent));
+            } catch (Exception exception) {
+                throw new ChatStreamInterruptedException("CLIENT_STREAM_INTERRUPTED", exception);
+            }
+        }
         if (StringUtils.hasText(chunk.getDelta())) {
             contentBuilder.append(chunk.getDelta());
-            persistPartialContentIfNeeded(assistantMessage, contentBuilder, lastPersistedAt, lastPersistedLength);
-        }
-        ChatStreamDeltaEvent deltaEvent = new ChatStreamDeltaEvent();
-        deltaEvent.setMessageId(assistantMessage.getId());
-        deltaEvent.setDelta(chunk.getDelta());
-        try {
-            emitter.send(SseEmitter.event().name("message_delta").data(deltaEvent));
-        } catch (Exception exception) {
-            throw new ChatStreamInterruptedException("CLIENT_STREAM_INTERRUPTED", exception);
+            this.persistPartialContentIfNeeded(assistantMessage, contentBuilder, lastPersistedAt, lastPersistedLength);
+            ChatStreamDeltaEvent deltaEvent = new ChatStreamDeltaEvent();
+            deltaEvent.setMessageId(assistantMessage.getId());
+            deltaEvent.setDelta(chunk.getDelta());
+            try {
+                emitter.send(SseEmitter.event().name("message_delta").data(deltaEvent));
+            } catch (Exception exception) {
+                throw new ChatStreamInterruptedException("CLIENT_STREAM_INTERRUPTED", exception);
+            }
         }
     }
 
@@ -809,15 +885,23 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         lastPersistedLength[0] = contentBuilder.length();
     }
 
-    private boolean hasRecoverableContent(StringBuilder contentBuilder) {
-        return contentBuilder != null && StringUtils.hasText(contentBuilder.toString());
+    /**
+     * 只要正文或思考过程任一存在，就认为这条消息值得保留为可继续生成的中断态。
+     */
+    private boolean hasRecoverableContent(StringBuilder contentBuilder, StringBuilder reasoningBuilder) {
+        return (contentBuilder != null && StringUtils.hasText(contentBuilder.toString()))
+                || (reasoningBuilder != null && StringUtils.hasText(reasoningBuilder.toString()));
     }
 
-    private void persistInterruptedMessage(ChatMessageDO assistantMessage, String content) {
+    /**
+     * 将中断消息保留为可继续生成状态，同时把已经拿到的思考过程合并回 metadata。
+     */
+    private void persistInterruptedMessage(ChatMessageDO assistantMessage, String content, String reasoningContent) {
         if (assistantMessage.getId() == null) {
             return;
         }
         assistantMessage.setContent(content);
+        assistantMessage.setMetadata(this.mergeAssistantMessageMetadata(assistantMessage.getMetadata(), reasoningContent));
         assistantMessage.setStatus(MessageStatusEnum.INTERRUPTED.getCode());
         assistantMessage.setFinishReason("interrupted");
         chatMessageMapper.updateById(assistantMessage);
@@ -1091,6 +1175,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         item.setMessageId(message.getId());
         item.setRole(message.getRole());
         item.setContent(message.getContent());
+        item.setReasoningContent(this.loadPersistedReasoningContent(message.getMetadata()));
+        item.setDeepThinkingEnabled(this.loadPersistedDeepThinkingEnabled(message.getMetadata()));
         item.setContentFormat(message.getContentFormat());
         item.setSeqNo(message.getSeqNo());
         item.setModelId(message.getModelId());
@@ -1119,6 +1205,18 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         return item;
     }
 
+    /**
+     * 将思考过程追加到 assistant metadata 中，避免刷新后丢失。
+     */
+    private String mergeAssistantMessageMetadata(String metadata, String reasoningContent) {
+        Map<String, Object> payload = this.parseMetadataPayload(metadata);
+        if (!StringUtils.hasText(reasoningContent)) {
+            return payload.isEmpty() ? null : this.toJsonSafely(payload);
+        }
+        payload.put("reasoningContent", reasoningContent);
+        return this.toJsonSafely(payload);
+    }
+
     private String buildUserMessageMetadata(List<FileAssetItemVO> attachments) {
         if (attachments == null || attachments.isEmpty()) {
             return null;
@@ -1133,11 +1231,10 @@ public class ChatMessageServiceImpl implements ChatMessageService {
      * 构造 assistant 消息扩展元数据，持久化搜索模式、规则、摘要和来源列表。
      */
     private String buildAssistantMessageMetadata(WebSearchContext webSearchContext) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
         if (webSearchContext == null) {
             return null;
         }
-
-        Map<String, Object> metadata = new LinkedHashMap<>();
         // 状态字段用于轻量回显；summary/results 用于继续生成时复用上下文。
         metadata.put("webSearchEnabled", webSearchContext.isEnabled());
         metadata.put("webSearchExecuted", webSearchContext.isExecuted());
@@ -1162,14 +1259,23 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     }
 
     /**
+     * assistant 占位消息在真正开始流式前就先写入思考模式标记，前端可立刻显示“思考中”占位。
+     */
+    private String mergeAssistantThinkingMetadata(String metadata, Boolean deepThinkingEnabled) {
+        if (deepThinkingEnabled == null) {
+            return metadata;
+        }
+        Map<String, Object> payload = this.parseMetadataPayload(metadata);
+        payload.put("deepThinkingEnabled", deepThinkingEnabled);
+        return this.toJsonSafely(payload);
+    }
+
+    /**
      * 从 assistant metadata 中恢复联网搜索上下文，供列表回显和 regenerate 复用。
      */
     private WebSearchContext parseWebSearchContext(String metadata) {
-        if (!StringUtils.hasText(metadata)) {
-            return null;
-        }
         try {
-            Map<String, Object> payload = objectMapper.readValue(metadata, new TypeReference<>() {});
+            Map<String, Object> payload = this.parseMetadataPayload(metadata);
             if (!payload.containsKey("webSearchEnabled")) {
                 return null;
             }
@@ -1200,11 +1306,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     }
 
     private List<FileAssetItemVO> parseMessageAttachments(String metadata) {
-        if (!StringUtils.hasText(metadata)) {
-            return List.of();
-        }
         try {
-            Map<String, Object> payload = objectMapper.readValue(metadata, new TypeReference<>() {});
+            Map<String, Object> payload = this.parseMetadataPayload(metadata);
             Object attachments = payload.get("attachments");
             if (attachments == null) {
                 return List.of();
@@ -1213,6 +1316,53 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         } catch (Exception exception) {
             log.warn("Failed to parse chat message attachments metadata", exception);
             return List.of();
+        }
+    }
+
+    /**
+     * 从消息 metadata 中恢复完整思考过程，供刷新回显使用。
+     */
+    private String loadPersistedReasoningContent(String metadata) {
+        if (!StringUtils.hasText(metadata)) {
+            return "";
+        }
+        try {
+            Map<String, Object> payload = this.parseMetadataPayload(metadata);
+            return StringUtils.hasText(this.metadataText(payload.get("reasoningContent")))
+                    ? this.metadataText(payload.get("reasoningContent"))
+                    : "";
+        } catch (Exception exception) {
+            log.warn("Failed to parse chat message reasoning metadata", exception);
+            return "";
+        }
+    }
+
+    /**
+     * 从消息 metadata 中恢复是否开启过原生思考模式，供前端在首个 reasoning chunk 到达前显示占位。
+     */
+    private Boolean loadPersistedDeepThinkingEnabled(String metadata) {
+        if (!StringUtils.hasText(metadata)) {
+            return null;
+        }
+        Map<String, Object> payload = this.parseMetadataPayload(metadata);
+        if (!payload.containsKey("deepThinkingEnabled")) {
+            return null;
+        }
+        return this.metadataBoolean(payload.get("deepThinkingEnabled"));
+    }
+
+    /**
+     * 宽松解析消息 metadata，兼容历史空值和后续新增字段。
+     */
+    private Map<String, Object> parseMetadataPayload(String metadata) {
+        if (!StringUtils.hasText(metadata)) {
+            return new LinkedHashMap<>();
+        }
+        try {
+            return this.objectMapper.readValue(metadata, new TypeReference<>() {});
+        } catch (Exception exception) {
+            log.warn("Failed to parse chat message metadata payload", exception);
+            return new LinkedHashMap<>();
         }
     }
 

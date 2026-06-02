@@ -153,7 +153,7 @@
 
 后续如果要继续迭代，建议补充这些表：
 
-- `prompt_template`：快速模式、专家模式提示词模板
+- `prompt_template`：通用附加提示词模板
 - `login_log`：登录日志
 - `recharge_order`：充值订单
 - `admin_user`：后台管理用户

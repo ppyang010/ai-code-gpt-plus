@@ -134,7 +134,7 @@ function parseSseEvent(rawEvent: string, onEvent: StreamHandler) {
   let eventName = 'message'
   const dataLines: string[] = []
 
-  // 当前后端使用命名事件：message_start / message_delta / message_end / message_error。
+  // 当前后端使用命名事件：message_start / message_reasoning_delta / message_delta / message_end / message_error。
   for (const line of lines) {
     if (line.startsWith('event:')) {
       eventName = line.slice(6).trim()

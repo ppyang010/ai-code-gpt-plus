@@ -26,10 +26,14 @@ public class ChatModelRequest {
     private String providerBaseUrl;
     /** 当前会话模式编码，模型客户端可按模式生成 mock 或后续扩展差异化参数。 */
     private String modeCode;
+    /** 是否开启模型原生思考模式，由 quick / expert 或显式请求字段折算而来。 */
+    private Boolean enableDeepThinking;
     /** 后端最终合成的系统提示词，包含模式提示词和可选联网搜索资料。 */
     private String systemPrompt;
     /** 当前用户输入正文，单独传给客户端避免和历史上下文重复。 */
     private String userContent;
+    /** 当前用户输入关联的图片附件，转成多模态 `image_url` 内容块后随本次 user message 一起发送。 */
+    private List<String> userImageUrls = new ArrayList<>();
     /** 已排序的历史上下文消息，供模型连续理解当前会话。 */
     private List<ChatModelMessage> messages = new ArrayList<>();
 
@@ -105,6 +109,14 @@ public class ChatModelRequest {
         this.modeCode = modeCode;
     }
 
+    public Boolean getEnableDeepThinking() {
+        return enableDeepThinking;
+    }
+
+    public void setEnableDeepThinking(Boolean enableDeepThinking) {
+        this.enableDeepThinking = enableDeepThinking;
+    }
+
     public String getSystemPrompt() {
         return systemPrompt;
     }
@@ -119,6 +131,14 @@ public class ChatModelRequest {
 
     public void setUserContent(String userContent) {
         this.userContent = userContent;
+    }
+
+    public List<String> getUserImageUrls() {
+        return userImageUrls;
+    }
+
+    public void setUserImageUrls(List<String> userImageUrls) {
+        this.userImageUrls = userImageUrls;
     }
 
     public List<ChatModelMessage> getMessages() {

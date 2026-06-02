@@ -18,8 +18,8 @@
 
 - 多会话聊天
 - 多模型切换
-- 快速模式 / 专家模式
-- 模式绑定不同提示词模板
+- 快速模式 / 思考模式
+- 模式驱动模型原生思考开关
 - 消息持久化
 - SSE 流式输出
 - token 和调用日志记录
@@ -36,82 +36,58 @@
 补充说明：
 
 - 图片上传当前已收敛为非断点续传直传版本，并已接入 `attachmentIds` 关联聊天消息
+- 对于支持视觉输入的供应商兼容协议，后端可将图片附件转换为多模态 `image_url` 内容块透传给模型；若供应商或模型不接受该格式，则需要以真实联调结果为准
 - 聊天响应中断后继续当前已进入代码实现并完成本地联调验证
 - 联网搜索当前不再只作为预留字段，后续需要按明确能力实现 `enableWebSearch`
 
 ## 模式设计
 
-第一版中，`快速模式 / 专家模式` 不单独实现成两套聊天逻辑，而是实现为：
+第一版中，`快速模式 / 思考模式` 不单独实现成两套聊天逻辑，也不再通过模式切换默认提示词模板，而是实现为：
 
 - 一个 `modeCode`
-- 绑定一份默认提示词模板
+- 一个是否开启模型原生思考能力的开关
 - 可选绑定默认模型
 - 可选绑定默认参数
 
-也就是说，模式本质上是“回答策略预设”。
+也就是说，模式本质上是“模型思考能力预设”，不是提示词风格预设。
 
 ### 推荐模式定义
 
 #### quick
 
 - 目标：更快返回结果
-- 风格：直接给答案，少铺垫
-- 默认提示词方向：简洁、结论优先、步骤适中
+- 模型行为：关闭模型原生思考模式
 - 适合：日常问答、代码片段、简短说明
 
 #### expert
 
-- 目标：更完整、更结构化
-- 风格：先分析，再分步骤输出，补充风险和注意事项
-- 默认提示词方向：强调推理过程、方案对比、结构化输出
+- 目标：在支持的模型上开启更完整的原生思考能力
+- 模型行为：开启模型原生思考模式
 - 适合：架构设计、复杂排查、方案评估、长文生成
 
 ### 模式实现原则
 
-后端收到 `modeCode` 后，优先根据模式加载对应提示词模板，再组合：
+后端收到 `modeCode` 后，优先将其折算为模型原生思考开关，并单独处理附加提示词：
 
-1. 模式默认提示词
-2. 会话级 `systemPrompt`
-3. 本次请求级 `systemPrompt`
+1. `quick` 对应关闭模型原生思考模式
+2. `expert` 对应开启模型原生思考模式
+3. `systemPrompt` 只负责会话级和请求级附加提示词合并，不再由 `modeCode` 决定默认模板
 
-最终拼装成发送给模型的系统提示词。
-
-### 建议的优先级
+### systemPrompt 合并优先级
 
 ```text
-请求级 systemPrompt > 会话级 systemPrompt > 模式默认提示词
+请求级 systemPrompt > 会话级 systemPrompt
 ```
 
 更准确地说，建议是“追加合并”而不是完全覆盖：
 
 ```text
 最终 system prompt =
-模式默认提示词
 + 会话级附加提示词
 + 本次请求附加提示词
 ```
 
-这样能保留模式差异，同时允许用户对单个会话或单次请求做补充控制。
-
-### 推荐的模式提示词示例
-
-#### quick 模式提示词示例
-
-```text
-你是一个高效、直接的 AI 助手。
-请优先给出结论，再补充必要说明。
-回答尽量简洁清晰，避免冗长铺垫。
-如果问题包含实现需求，请优先给出可执行方案。
-```
-
-#### expert 模式提示词示例
-
-```text
-你是一个专业顾问型 AI 助手。
-请先理解问题背景，再给出结构化分析。
-输出时尽量包含：结论、原因、步骤、风险、建议。
-如果存在多种方案，请做简要对比并说明取舍。
-```
+这样既能让“快速 / 思考”保持纯模型能力语义，又允许用户对单个会话或单次请求补充额外约束。
 
 ## 统一约定
 
@@ -332,9 +308,9 @@ Content-Type: application/json
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---:|---|
 | title | String | 否 | 会话标题，可为空 |
-| modeCode | String | 是 | `quick` / `expert`，会影响默认提示词模板 |
+| modeCode | String | 是 | `quick` / `expert`，表示该会话默认关闭 / 开启模型原生思考模式 |
 | defaultModelId | Long | 否 | 默认模型 ID |
-| systemPrompt | String | 否 | 会话级附加提示词，不替代模式默认提示词 |
+| systemPrompt | String | 否 | 会话级附加提示词，和本次请求级 `systemPrompt` 合并使用 |
 
 ### 默认标题策略
 
@@ -552,10 +528,10 @@ Accept: text/event-stream
 | sessionId | Long | 是 | 会话 ID |
 | content | String | 是 | 用户输入内容 |
 | modelId | Long | 否 | 本次指定模型，不传则取会话默认模型 |
-| modeCode | String | 否 | `quick` / `expert`，不传则沿用会话，并据此加载默认提示词模板 |
-| systemPrompt | String | 否 | 本次附加提示词，和模式模板合并使用 |
+| modeCode | String | 否 | `quick` / `expert`，不传则沿用会话；`quick` 表示关闭模型原生思考，`expert` 表示开启模型原生思考 |
+| systemPrompt | String | 否 | 本次附加提示词，只和会话级 `systemPrompt` 合并，不再由模式注入默认模板 |
 | attachmentIds | List<Long> | 否 | 已上传附件 ID 列表，支持图片附件，按用户选择顺序传入 |
-| enableDeepThinking | Boolean | 否 | 预留字段 |
+| enableDeepThinking | Boolean | 否 | 是否开启模型原生思考模式；如未显式传值，可由 `modeCode` 折算 |
 | enableWebSearch | Boolean | 否 | 是否启用联网搜索；开启后服务端需先检索，再把结果摘要注入模型上下文 |
 | webSearchMode | String | 否 | 联网搜索模式：`disabled` / `enabled` / `auto`；由后端按 `webSearchMode + content` 统一折算为最终 `enableWebSearch` |
 | regenerateMessageId | Long | 否 | 若是重新生成，传上一条 assistant 消息 ID |
@@ -565,18 +541,19 @@ Accept: text/event-stream
 1. 校验 `sessionId` 属于当前用户
 2. 校验模型是否可用
 3. 校验 `attachmentIds` 是否都属于当前用户且已完成上传
-4. 如果 `webSearchMode = auto`，由后端按意图规则判定是否需要联网，再折算为 `enableWebSearch`
-5. 如果 `enableWebSearch = true`，先执行联网检索并拿到标准化结果摘要
-6. 根据 `modeCode` 解析模式默认提示词模板
-7. 合并模式提示词、会话级提示词、本次请求级提示词和联网搜索结果摘要
-8. 先落库用户消息
-9. 如果当前是会话首条用户消息且会话标题仍为默认标题，则根据用户消息自动生成短标题
-10. 创建一条 assistant 占位消息，状态可先记为生成中，并把搜索上下文写入 `metadata`
-11. 调用模型接口并逐段返回
-12. 流结束后更新 assistant 完整内容、token、finishReason
-13. 记录 `api_call_log`
-14. 记录 `user_token_usage`
-15. 更新 `chat_session.lastMessageAt`
+4. 对图片附件读取真实文件内容，转换为多模态 `image_url` 内容块（优先使用 `data:` URL，避免外部模型无法访问本机地址）
+5. 如果 `webSearchMode = auto`，由后端按意图规则判定是否需要联网，再折算为 `enableWebSearch`
+6. 如果 `enableWebSearch = true`，先执行联网检索并拿到标准化结果摘要
+7. 根据 `modeCode` 折算本次模型是否开启原生思考模式
+8. 合并会话级提示词、本次请求级提示词和联网搜索结果摘要
+9. 先落库用户消息
+10. 如果当前是会话首条用户消息且会话标题仍为默认标题，则根据用户消息自动生成短标题
+11. 创建一条 assistant 占位消息，状态可先记为生成中，并把搜索上下文写入 `metadata`
+12. 调用模型接口并逐段返回正文；若模型返回原生思考内容，则额外逐段返回思考过程片段
+13. 流结束后更新 assistant 完整内容、token、finishReason，并把思考过程写入 `chat_message.metadata`
+14. 记录 `api_call_log`
+15. 记录 `user_token_usage`
+16. 更新 `chat_session.lastMessageAt`
 
 ### 联网搜索第一版建议
 
@@ -590,6 +567,7 @@ Accept: text/event-stream
   - 来源域名
   - 相关性分数
 - assistant `metadata` 需保存 `webSearchEnabled`、`webSearchExecuted`、`webSearchStatus`、`webSearchSummary` 和 `webSearchResults`
+- 当模型返回原生思考过程时，assistant `metadata` 需额外保存 `reasoningContent`，用于刷新回显和继续生成前展示
 - `regenerateMessage` 不重新搜索，直接复用原 assistant message `metadata` 中的搜索摘要
 
 ---
@@ -600,9 +578,11 @@ Accept: text/event-stream
 
 ### 能力目标
 
-- 支持聊天输入区上传图片
+- 支持聊天输入区选择图片
+- 支持聊天输入区直接粘贴图片
 - 支持后续扩展普通文件上传
 - 上传完成后返回 `fileId`，供 `/api/chat/message/send` 通过 `attachmentIds` 引用
+- 后端在模型请求阶段可将图片附件进一步转换为多模态 `image_url` 内容块，尝试透传给支持视觉输入的模型
 - 第一版实现收敛为单接口非断点续传上传，不再维护 `init/chunk/complete` 分片协议
 
 ### 上传范围建议
@@ -650,6 +630,7 @@ GET /api/file/content/{fileId}
 说明：
 
 - 当前通过后端读取本地已保存图片，用于聊天输入区预览和消息区回显
+- 前端可通过文件选择或剪贴板粘贴两种方式触发同一条图片上传链路
 - 当前项目还未接入登录态，因此读取接口默认不做额外鉴权
 - 等登录鉴权接入后，再把读取权限收敛到真实用户会话
 
@@ -706,6 +687,7 @@ Connection: keep-alive
 ### 事件类型建议
 
 - `message_start`
+- `message_reasoning_delta`
 - `message_delta`
 - `message_end`
 - `message_error`
@@ -720,7 +702,21 @@ event: message_start
 data: {"sessionId":1001,"messageId":9003,"role":"assistant","modelId":2001,"modelCode":"deepseek-v4-flash","modelName":"DeepSeek V4 Flash"}
 ```
 
-### 2. message_delta
+### 2. message_reasoning_delta
+
+表示返回一段原生思考过程文本。
+
+```text
+event: message_reasoning_delta
+data: {"messageId":9003,"reasoningDelta":"先确认这次需求只需要展示层回显，不涉及新的表结构。"}
+```
+
+说明：
+
+- 只有模型开启原生思考且供应商返回了思考内容时才发送
+- 前端应将其和正文分开展示，不直接拼进最终回答正文
+
+### 3. message_delta
 
 表示返回增量文本片段。
 
@@ -729,7 +725,7 @@ event: message_delta
 data: {"messageId":9003,"delta":"下面我先帮你整理 Entity 和 Mapper 的结构。"}
 ```
 
-### 3. message_end
+### 4. message_end
 
 表示本次消息生成完成。
 
@@ -745,7 +741,7 @@ data: {
 }
 ```
 
-### 4. message_error
+### 5. message_error
 
 表示本次流式生成失败。
 
@@ -754,7 +750,7 @@ event: message_error
 data: {"messageId":9003,"errorCode":"MODEL_TIMEOUT","errorMessage":"模型响应超时"}
 ```
 
-### 5. heartbeat
+### 6. heartbeat
 
 如果生成较长，后端可以定期发心跳。
 
@@ -769,11 +765,13 @@ data: {"timestamp":"2026-04-21 15:01:00"}
 
 1. `message_start`
    创建 assistant 消息气泡
-2. `message_delta`
+2. `message_reasoning_delta`
+   持续拼接思考过程内容
+3. `message_delta`
    持续拼接内容
-3. `message_end`
+4. `message_end`
    标记完成，更新 token 信息
-4. `message_error`
+5. `message_error`
    标记失败并展示错误
 
 ---
@@ -847,8 +845,8 @@ public class ChatSessionCreateRequest {
 
 说明：
 
-- `modeCode` 用于决定默认提示词模板
-- `systemPrompt` 是会话级补充提示词，不建议直接替代模板
+- `modeCode` 用于记录该会话默认关闭 / 开启模型原生思考模式
+- `systemPrompt` 是会话级补充提示词
 
 ### ChatSessionUpdateTitleRequest
 
@@ -954,7 +952,7 @@ public class ChatMessageSendRequest {
 
 说明：
 
-- `modeCode` 决定本次请求使用哪套模式模板
+- `modeCode` 决定本次请求是否开启模型原生思考模式
 - `systemPrompt` 是本次请求附加提示词
 - `attachmentIds` 引用已上传完成的文件或图片
 - 最终发给模型的系统提示词由后端统一组装
@@ -990,6 +988,7 @@ public class ChatMessageItemVO {
     private Long messageId;
     private String role;
     private String content;
+    private String reasoningContent;
     private String contentFormat;
     private Integer seqNo;
     private Long modelId;
@@ -1156,45 +1155,30 @@ public interface ChatMessageService {
 ```java
 public interface ChatPromptResolver {
 
-    String resolveSystemPrompt(String modeCode, String sessionPrompt, String requestPrompt);
+    String resolveSystemPrompt(String sessionPrompt, String requestPrompt);
 }
 ```
 
 推荐职责：
 
-- 根据 `modeCode` 找到默认模板
-- 合并会话级和请求级补充提示词
+- 统一合并会话级和请求级补充提示词
+- 不再把 `quick / expert` 解释成默认模板切换
 - 输出最终发送给模型的系统提示词
 
 ## 推荐的第一版实现方式
 
-第一版为了简单，可先把模式模板写在配置文件或枚举中，不一定马上建表。
+第一版建议直接把 `quick / expert` 折算为统一的原生思考开关：
 
-例如：
+- `quick` -> `enableDeepThinking = false`
+- `expert` -> `enableDeepThinking = true`
 
-```yaml
-chat:
-  mode-prompts:
-    quick: |
-      你是一个高效、直接的 AI 助手。
-      请优先给出结论，再补充必要说明。
-    expert: |
-      你是一个专业顾问型 AI 助手。
-      请先分析问题，再给出结构化答案。
-```
-
-后续如果需要后台可配置，再升级为数据库表。
+模型客户端再根据供应商协议把该开关翻译成真实请求参数。
 
 ## 后续可扩展方案
 
-如果你后面想让运营后台可改模板，建议新增：
+如果你后面想让运营后台可改附加提示词，建议新增：
 
 - `prompt_template` 表
-
-每种模式至少维护一条默认模板，例如：
-
-- `quick_default`
-- `expert_default`
 
 也可以继续扩展：
 

@@ -11,6 +11,8 @@ public class ChatStreamStartEvent {
     private Long modelId;
     private String modelCode;
     private String modelName;
+    /** 本次 assistant 回复是否开启了模型原生思考模式。 */
+    private Boolean deepThinkingEnabled;
     /** 本次 assistant 回答是否被判定为联网搜索回答。 */
     private Boolean webSearchEnabled;
     /** 本次 assistant 回答是否已经真实执行过搜索。 */

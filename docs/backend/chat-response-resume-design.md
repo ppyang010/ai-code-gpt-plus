@@ -48,7 +48,7 @@
 前端 sendMessage
   -> POST /api/chat/message/send
   -> 后端创建 assistant 占位消息
-  -> SSE 推送 message_start / message_delta / message_end
+  -> SSE 推送 message_start / message_reasoning_delta(可选) / message_delta / message_end
   -> 当前前端仅在内存拼接 delta
   -> 当前后端仅在成功结束时一次性回写完整内容
 ```

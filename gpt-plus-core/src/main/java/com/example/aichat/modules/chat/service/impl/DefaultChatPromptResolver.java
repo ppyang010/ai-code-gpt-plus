@@ -1,42 +1,30 @@
 package com.example.aichat.modules.chat.service.impl;
 
-import com.example.aichat.common.enums.ChatModeEnum;
 import com.example.aichat.modules.chat.service.ChatPromptResolver;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+/**
+ * 默认系统提示词拼装器。
+ *
+ * <p>当前 quick / expert 已经收敛为模型原生思考开关，因此这里不再根据模式注入默认模板，
+ * 只负责合并会话级和请求级附加提示词。</p>
+ */
 @Component
 public class DefaultChatPromptResolver implements ChatPromptResolver {
 
-    private final Map<String, String> modePromptTemplates = new LinkedHashMap<>();
-
-    public DefaultChatPromptResolver() {
-        modePromptTemplates.put(
-                ChatModeEnum.QUICK.getCode(),
-                "You are a concise and efficient AI assistant.\n"
-                        + "Prioritize direct answers and practical next steps.\n"
-                        + "Keep the response clear and compact."
-        );
-        modePromptTemplates.put(
-                ChatModeEnum.EXPERT.getCode(),
-                "You are a professional consultant-style AI assistant.\n"
-                        + "First understand the problem, then provide a structured answer.\n"
-                        + "Include reasoning, tradeoffs, risks, and actionable suggestions when relevant."
-        );
-    }
-
     @Override
-    public String resolveSystemPrompt(String modeCode, String sessionPrompt, String requestPrompt) {
+    public String resolveSystemPrompt(String sessionPrompt, String requestPrompt) {
         StringBuilder builder = new StringBuilder();
-        // 提示词按“模式默认 + 会话补充 + 本次请求补充”追加，保留模式差异也允许局部增强。
-        append(builder, modePromptTemplates.get(ChatModeEnum.fromCodeOrDefault(modeCode).getCode()));
-        append(builder, sessionPrompt);
-        append(builder, requestPrompt);
+        // 当前只合并用户显式提供的附加提示词，避免模式切换再隐式改变系统 prompt。
+        this.append(builder, sessionPrompt);
+        this.append(builder, requestPrompt);
         return builder.toString();
     }
 
+    /**
+     * 以双换行拼接每一段非空提示词，保留调用方输入的自然段边界。
+     */
     private void append(StringBuilder builder, String content) {
         if (!StringUtils.hasText(content)) {
             return;

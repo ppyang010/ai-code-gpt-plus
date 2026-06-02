@@ -186,6 +186,42 @@ function getWebSearchBadgeText(message: ChatMessage) {
   return '联网搜索'
 }
 
+/**
+ * 开启思考模式后，消息开始生成就先展示“思考中”占位；真正收到 reasoning chunk 后持续追加内容。
+ */
+function shouldShowReasoningPanel(message: ChatMessage) {
+  if (message.role !== 'assistant') {
+    return false
+  }
+  if (message.reasoningContent?.trim()) {
+    return true
+  }
+  return Boolean(message.deepThinkingEnabled && message.status === 'streaming')
+}
+
+/**
+ * 根据消息状态给思考过程折叠区提供更贴近当前阶段的标题。
+ */
+function getReasoningSummaryText(message: ChatMessage) {
+  if (message.status === 'streaming') {
+    return message.reasoningContent?.trim() ? '思考中' : '思考中...'
+  }
+  if (message.status === 'interrupted') {
+    return '已中断的思考过程'
+  }
+  return '思考过程'
+}
+
+/**
+ * 思考区在首个 chunk 到来前先显示占位文案，避免用户误以为没有开启思考模式。
+ */
+function getReasoningBodyText(message: ChatMessage) {
+  if (message.reasoningContent?.trim()) {
+    return message.reasoningContent
+  }
+  return message.status === 'streaming' ? '等待模型返回思考过程...' : ''
+}
+
 function getLastMessage() {
   return chatStore.messages[chatStore.messages.length - 1]
 }
@@ -568,6 +604,27 @@ function openImagePicker() {
   imageInputRef.value?.click()
 }
 
+/**
+ * 从剪贴板事件中提取图片文件；只有图片才走上传链路，普通文本粘贴保持默认行为。
+ */
+function extractImageFilesFromClipboard(
+  event: Event & {
+    clipboardData?: {
+      items?: ArrayLike<{
+        kind?: string
+        type?: string
+        getAsFile?: () => unknown
+      }>
+    } | null
+  },
+) {
+  const clipboardItems = Array.from(event.clipboardData?.items || [])
+  return clipboardItems
+    .filter((item) => item.kind === 'file' && item.type?.startsWith('image/'))
+    .map((item) => item.getAsFile?.())
+    .filter(Boolean)
+}
+
 async function handleImageSelected(event: Event) {
   const input = event.target as { files?: unknown[] | null; value?: string } | null
   const selectedFiles = Array.from(input?.files || [])
@@ -578,6 +635,42 @@ async function handleImageSelected(event: Event) {
 
   if (input) {
     input.value = ''
+  }
+}
+
+/**
+ * 输入区支持直接粘贴图片，并复用现有发送前预览与上传逻辑。
+ */
+async function handleSenderPaste(
+  event: Event & {
+    clipboardData?: {
+      items?: ArrayLike<{
+        kind?: string
+        type?: string
+        getAsFile?: () => unknown
+      }>
+    } | null
+    preventDefault: () => void
+  },
+) {
+  const imageFiles = extractImageFilesFromClipboard(event)
+  if (imageFiles.length === 0) {
+    return
+  }
+
+  event.preventDefault()
+
+  if (chatStore.isResponding) {
+    MessagePlugin.warning('当前正在生成回复，请稍后再粘贴图片')
+    return
+  }
+  if (chatStore.isImageUploading) {
+    MessagePlugin.warning('图片上传中，请稍后再试')
+    return
+  }
+
+  for (const file of imageFiles) {
+    await chatStore.uploadImage(file as never)
   }
 }
 
@@ -723,7 +816,7 @@ function removePendingAttachment(fileId: number) {
           class="message-panel__chat-list"
           :data="chatListData"
           :clear-history="false"
-          :text-loading="chatStore.isResponding"
+          :text-loading="false"
           animation="gradient"
           layout="both"
           :auto-scroll="true"
@@ -738,6 +831,14 @@ function removePendingAttachment(fileId: number) {
               >
                 {{ getWebSearchBadgeText(item.sourceMessage) }}
               </div>
+              <details
+                v-if="shouldShowReasoningPanel(item.sourceMessage)"
+                class="chat-reasoning"
+                :open="item.sourceMessage.status === 'streaming'"
+              >
+                <summary class="chat-reasoning__summary">{{ getReasoningSummaryText(item.sourceMessage) }}</summary>
+                <div class="chat-reasoning__content">{{ getReasoningBodyText(item.sourceMessage) }}</div>
+              </details>
               <div
                 v-if="item.sourceMessage.role === 'assistant'"
                 class="chat-markdown"
@@ -832,77 +933,79 @@ function removePendingAttachment(fileId: number) {
           </div>
         </div>
 
-        <t-chat-sender
-          v-model="draftMessage"
-          class="composer__sender"
-          :loading="chatStore.isResponding"
-          :send-btn-disabled="!canSend"
-          :textarea-props="{
-            autosize: { minRows: 4, maxRows: 8 },
-            placeholder: 'Ask anything, refine prompts, or continue the current thread...',
-          }"
-          @send="handleSendClick"
-          @stop="handleStopClick"
-        >
-          <template #footer-prefix>
-            <div class="composer__footer-prefix">
-              <button
-                type="button"
-                class="composer__upload-button"
-                :disabled="chatStore.isResponding || chatStore.isImageUploading"
-                @click="openImagePicker"
-              >
-                {{ chatStore.isImageUploading ? '上传中...' : '添加图片' }}
-              </button>
-              <!-- 联网模式保留为紧凑下拉，避免长说明挤占输入区空间。 -->
-              <label class="composer__web-search-dropdown">
-                <span class="composer__web-search-label">联网</span>
-                <select
-                  v-model="chatStore.currentWebSearchMode"
-                  class="composer__web-search-select"
-                  :disabled="chatStore.isResponding"
-                  aria-label="联网搜索模式"
+        <div class="composer__sender-shell" @paste.capture="handleSenderPaste">
+          <t-chat-sender
+            v-model="draftMessage"
+            class="composer__sender"
+            :loading="chatStore.isResponding"
+            :send-btn-disabled="!canSend"
+            :textarea-props="{
+              autosize: { minRows: 4, maxRows: 8 },
+              placeholder: 'Ask anything, refine prompts, or continue the current thread...',
+            }"
+            @send="handleSendClick"
+            @stop="handleStopClick"
+          >
+            <template #footer-prefix>
+              <div class="composer__footer-prefix">
+                <button
+                  type="button"
+                  class="composer__upload-button"
+                  :disabled="chatStore.isResponding || chatStore.isImageUploading"
+                  @click="openImagePicker"
                 >
-                  <option
-                    v-for="option in webSearchModeOptions"
-                    :key="option.value"
-                    :value="option.value"
+                  {{ chatStore.isImageUploading ? '上传中...' : '添加图片' }}
+                </button>
+                <!-- 联网模式保留为紧凑下拉，避免长说明挤占输入区空间。 -->
+                <label class="composer__web-search-dropdown">
+                  <span class="composer__web-search-label">联网</span>
+                  <select
+                    v-model="chatStore.currentWebSearchMode"
+                    class="composer__web-search-select"
+                    :disabled="chatStore.isResponding"
+                    aria-label="联网搜索模式"
                   >
-                    {{ option.label }}
-                  </option>
-                </select>
-              </label>
-            </div>
-          </template>
+                    <option
+                      v-for="option in webSearchModeOptions"
+                      :key="option.value"
+                      :value="option.value"
+                    >
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </label>
+              </div>
+            </template>
 
-          <template #suffix>
-            <div class="composer__suffix-actions">
-              <t-button
-                v-if="chatStore.isResponding"
-                size="small"
-                theme="danger"
-                variant="outline"
-                @click="handleStopClick"
-              >
-                停止生成
-              </t-button>
-              <t-button
-                v-else
-                class="composer__send-button"
-                theme="primary"
-                shape="circle"
-                :disabled="!canSend"
-                aria-label="Send message"
-                title="Send"
-                @click="handleSendClick()"
-              >
-                <template #icon><SendIcon /></template>
-              </t-button>
-              <span class="composer__mode">当前模式：{{ getModeLabel(chatStore.currentMode, { compact: true }) }}</span>
-              <span class="composer__mode">联网：{{ getWebSearchModeLabel(chatStore.currentWebSearchMode) }}</span>
-            </div>
-          </template>
-        </t-chat-sender>
+            <template #suffix>
+              <div class="composer__suffix-actions">
+                <t-button
+                  v-if="chatStore.isResponding"
+                  size="small"
+                  theme="danger"
+                  variant="outline"
+                  @click="handleStopClick"
+                >
+                  停止生成
+                </t-button>
+                <t-button
+                  v-else
+                  class="composer__send-button"
+                  theme="primary"
+                  shape="circle"
+                  :disabled="!canSend"
+                  aria-label="Send message"
+                  title="Send"
+                  @click="handleSendClick()"
+                >
+                  <template #icon><SendIcon /></template>
+                </t-button>
+                <span class="composer__mode">当前模式：{{ getModeLabel(chatStore.currentMode, { compact: true }) }}</span>
+                <span class="composer__mode">联网：{{ getWebSearchModeLabel(chatStore.currentWebSearchMode) }}</span>
+              </div>
+            </template>
+          </t-chat-sender>
+        </div>
 
         <input
           ref="imageInputRef"

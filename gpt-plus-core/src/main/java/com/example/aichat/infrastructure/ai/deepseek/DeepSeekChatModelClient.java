@@ -77,29 +77,30 @@ public class DeepSeekChatModelClient implements ChatModelClient {
 
         // DeepSeek 的 token usage 只会在流式尾包返回，因此请求必须打开 include_usage。
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("model", resolveModel(request));
+        payload.put("model", this.resolveModel(request));
         payload.put("stream", Boolean.TRUE);
         payload.put("stream_options", Map.of("include_usage", Boolean.TRUE));
-        payload.put("messages", buildMessages(request));
+        payload.put("messages", this.buildMessages(request));
+        this.appendThinkingConfig(payload, request);
 
         try {
-            String requestBody = objectMapper.writeValueAsString(payload);
+            String requestBody = this.objectMapper.writeValueAsString(payload);
             HttpRequest httpRequest = HttpRequest.newBuilder()
-                    .uri(URI.create(buildChatCompletionsUrl()))
+                    .uri(URI.create(this.buildChatCompletionsUrl()))
                     .timeout(Duration.ofMinutes(3))
                     .header("Content-Type", "application/json")
                     .header("Accept", "text/event-stream")
-                    .header("Authorization", "Bearer " + properties.getApiKey())
+                    .header("Authorization", "Bearer " + this.properties.getApiKey())
                     .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
                     .build();
 
-            HttpResponse<InputStream> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
+            HttpResponse<InputStream> response = this.httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                String errorBody = readBody(response.body());
-                throw buildHttpException(response.statusCode(), errorBody);
+                String errorBody = this.readBody(response.body());
+                throw this.buildHttpException(response.statusCode(), errorBody);
             }
 
-            return readStreamResponse(request, response, chunkConsumer);
+            return this.readStreamResponse(request, response, chunkConsumer);
         } catch (ChatStreamInterruptedException exception) {
             throw exception;
         } catch (ChatModelClientException exception) {
@@ -121,6 +122,7 @@ public class DeepSeekChatModelClient implements ChatModelClient {
             Consumer<ChatModelStreamChunk> chunkConsumer
     ) throws IOException {
         StringBuilder contentBuilder = new StringBuilder();
+        StringBuilder reasoningBuilder = new StringBuilder();
         String requestId = null;
         String finishReason = "stop";
         Integer promptTokens = 0;
@@ -162,6 +164,11 @@ public class DeepSeekChatModelClient implements ChatModelClient {
                 Map<String, Object> firstChoice = choices.get(0);
                 Map<String, Object> delta = castMap(firstChoice.get("delta"));
                 if (delta != null) {
+                    String reasoningDelta = this.asText(delta.get("reasoning_content"));
+                    if (StringUtils.hasText(reasoningDelta)) {
+                        reasoningBuilder.append(reasoningDelta);
+                        chunkConsumer.accept(new ChatModelStreamChunk("", reasoningDelta, false));
+                    }
                     String deltaContent = asText(delta.get("content"));
                     if (StringUtils.hasText(deltaContent)) {
                         contentBuilder.append(deltaContent);
@@ -179,9 +186,10 @@ public class DeepSeekChatModelClient implements ChatModelClient {
         ChatModelResponse modelResponse = new ChatModelResponse();
         modelResponse.setRequestId(requestId);
         modelResponse.setHttpStatus(response.statusCode());
-        modelResponse.setModelCode(resolveModel(request));
+        modelResponse.setModelCode(this.resolveModel(request));
         modelResponse.setModelName(request.getModelName());
         modelResponse.setContent(contentBuilder.toString());
+        modelResponse.setReasoningContent(reasoningBuilder.toString());
         modelResponse.setFinishReason(finishReason);
         modelResponse.setPromptTokens(promptTokens);
         modelResponse.setCompletionTokens(completionTokens);
@@ -207,28 +215,85 @@ public class DeepSeekChatModelClient implements ChatModelClient {
         return normalized + "/chat/completions";
     }
 
-    private List<Map<String, String>> buildMessages(ChatModelRequest request) {
-        List<Map<String, String>> messages = new ArrayList<>();
+    /**
+     * DeepSeek 原生思考模式由 `thinking.type` 控制，这里把统一请求字段翻译成供应商协议。
+     */
+    private void appendThinkingConfig(Map<String, Object> payload, ChatModelRequest request) {
+        if (request == null || request.getEnableDeepThinking() == null) {
+            return;
+        }
+        payload.put("thinking", Map.of("type", request.getEnableDeepThinking() ? "enabled" : "disabled"));
+    }
+
+    /**
+     * 组装 DeepSeek 请求消息；当前用户输入若带图片附件，则按 OpenAI-compatible 多模态 content 数组透传。
+     */
+    private List<Map<String, Object>> buildMessages(ChatModelRequest request) {
+        List<Map<String, Object>> messages = new ArrayList<>();
         if (StringUtils.hasText(request.getSystemPrompt())) {
-            messages.add(newMessage("system", request.getSystemPrompt()));
+            messages.add(this.newTextMessage("system", request.getSystemPrompt()));
         }
         // 历史上下文在 service 层已经按 seqNo 排序，这里只负责过滤空消息并拼装供应商格式。
         for (ChatModelMessage modelMessage : request.getMessages()) {
             if (modelMessage != null && StringUtils.hasText(modelMessage.getRole()) && StringUtils.hasText(modelMessage.getContent())) {
-                messages.add(newMessage(modelMessage.getRole(), modelMessage.getContent()));
+                messages.add(this.newTextMessage(modelMessage.getRole(), modelMessage.getContent()));
             }
         }
-        if (StringUtils.hasText(request.getUserContent())) {
-            messages.add(newMessage("user", request.getUserContent()));
+        if (StringUtils.hasText(request.getUserContent()) || (request.getUserImageUrls() != null && !request.getUserImageUrls().isEmpty())) {
+            messages.add(this.newUserMessage(request.getUserContent(), request.getUserImageUrls()));
         }
         return messages;
     }
 
-    private Map<String, String> newMessage(String role, String content) {
-        Map<String, String> message = new LinkedHashMap<>();
+    /**
+     * 构造纯文本消息对象，保持 role/content 字段顺序稳定。
+     */
+    private Map<String, Object> newTextMessage(String role, String content) {
+        Map<String, Object> message = new LinkedHashMap<>();
         message.put("role", role);
         message.put("content", content);
         return message;
+    }
+
+    /**
+     * 构造当前用户的多模态消息对象，优先保留文本，再追加 image_url 内容块。
+     */
+    private Map<String, Object> newUserMessage(String text, List<String> imageUrls) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("role", "user");
+        if (imageUrls == null || imageUrls.isEmpty()) {
+            message.put("content", text);
+            return message;
+        }
+
+        List<Map<String, Object>> content = new ArrayList<>();
+        if (StringUtils.hasText(text)) {
+            content.add(this.newTextPart(text));
+        }
+        for (String imageUrl : imageUrls) {
+            if (StringUtils.hasText(imageUrl)) {
+                content.add(this.newImageUrlPart(imageUrl));
+            }
+        }
+        message.put("content", content);
+        return message;
+    }
+
+    private Map<String, Object> newTextPart(String text) {
+        Map<String, Object> part = new LinkedHashMap<>();
+        part.put("type", "text");
+        part.put("text", text);
+        return part;
+    }
+
+    private Map<String, Object> newImageUrlPart(String imageUrl) {
+        Map<String, Object> imageUrlPayload = new LinkedHashMap<>();
+        imageUrlPayload.put("url", imageUrl);
+
+        Map<String, Object> part = new LinkedHashMap<>();
+        part.put("type", "image_url");
+        part.put("image_url", imageUrlPayload);
+        return part;
     }
 
     @SuppressWarnings("unchecked")

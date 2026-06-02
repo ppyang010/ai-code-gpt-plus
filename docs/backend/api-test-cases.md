@@ -229,6 +229,7 @@ curl -N -X POST "http://127.0.0.1:8080/api/chat/message/send" \
 - 返回 `text/event-stream`
 - 应该依次收到：
   - `message_start`
+  - 若开启思考模式且供应商返回思考过程，收到多个 `message_reasoning_delta`
   - 多个 `message_delta`
   - `message_end`
 
@@ -345,7 +346,7 @@ curl -N -X POST "http://127.0.0.1:8080/api/chat/message/send" \
 #### 联调检查点
 
 - 返回 `text/event-stream`
-- `message_start -> message_delta -> message_end` 顺序正常
+- `message_start -> message_reasoning_delta(可选) -> message_delta -> message_end` 顺序正常
 - `chat_message.metadata` 中存在附件信息
 - `GET /api/chat/message/list` 返回的 user message 包含 `attachments`
 
@@ -363,7 +364,7 @@ curl -N -X POST "http://127.0.0.1:8080/api/chat/message/send" \
 2. 在收到部分 `message_delta` 后主动中断前端请求或关闭页面
 3. 重新查询消息列表，确认目标 assistant 消息状态和部分内容
 4. 调用 `POST /api/chat/message/regenerate`
-5. 确认继续收到 `message_start -> message_delta -> message_end`
+5. 确认继续收到 `message_start -> message_reasoning_delta(可选) -> message_delta -> message_end`
 
 #### 查询中断消息列表
 

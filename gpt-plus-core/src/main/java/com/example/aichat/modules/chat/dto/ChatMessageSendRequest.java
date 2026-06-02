@@ -26,6 +26,7 @@ public class ChatMessageSendRequest {
 
     private List<Long> attachmentIds;
 
+    /** 是否开启模型原生思考模式；未显式传值时由 `modeCode` 折算。 */
     private Boolean enableDeepThinking;
     /** 兼容旧契约的联网搜索布尔开关；没有 webSearchMode 时作为手动开关兜底。 */
     private Boolean enableWebSearch;

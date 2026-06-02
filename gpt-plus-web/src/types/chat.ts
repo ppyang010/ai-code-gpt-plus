@@ -78,6 +78,10 @@ export interface ChatMessageItem {
   messageId: number
   role: 'assistant' | 'user' | 'system'
   content: string
+  /** assistant 原生思考过程全文，用于刷新后回显。 */
+  reasoningContent?: string | null
+  /** assistant 消息是否开启了模型原生思考模式。 */
+  deepThinkingEnabled?: boolean | null
   contentFormat: string
   seqNo: number
   modelId: number | null
@@ -113,6 +117,7 @@ export interface ChatMessageSendRequest {
   modeCode?: 'quick' | 'expert'
   systemPrompt?: string | null
   attachmentIds?: number[]
+  enableDeepThinking?: boolean
   enableWebSearch?: boolean
   webSearchMode?: WebSearchMode
 }
@@ -122,6 +127,7 @@ export interface ChatMessageRegenerateRequest {
   regenerateMessageId: number
   modelId?: number | null
   modeCode?: 'quick' | 'expert'
+  enableDeepThinking?: boolean
 }
 
 export interface ChatStreamStartEvent {
@@ -131,6 +137,7 @@ export interface ChatStreamStartEvent {
   modelId: number | null
   modelCode: string | null
   modelName: string | null
+  deepThinkingEnabled?: boolean
   /** 流式开始时同步的联网搜索开关状态。 */
   webSearchEnabled?: boolean
   /** 流式开始时同步的真实搜索执行状态。 */
@@ -142,6 +149,11 @@ export interface ChatStreamStartEvent {
 export interface ChatStreamDeltaEvent {
   messageId: number
   delta: string
+}
+
+export interface ChatStreamReasoningDeltaEvent {
+  messageId: number
+  reasoningDelta: string
 }
 
 export interface ChatStreamEndEvent {

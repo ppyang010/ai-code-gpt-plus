@@ -1,5 +1,8 @@
 package com.example.aichat.infrastructure.ai;
 
+/**
+ * 单次模型调用的最终聚合结果。
+ */
 public class ChatModelResponse {
 
     private String requestId;
@@ -9,6 +12,8 @@ public class ChatModelResponse {
     private String modelCode;
     private String modelName;
     private String content;
+    /** 供应商返回的完整原生思考过程，用于消息回显或调试扩展。 */
+    private String reasoningContent;
     private String finishReason;
     private Integer promptTokens;
     private Integer completionTokens;
@@ -68,6 +73,14 @@ public class ChatModelResponse {
 
     public void setContent(String content) {
         this.content = content;
+    }
+
+    public String getReasoningContent() {
+        return reasoningContent;
+    }
+
+    public void setReasoningContent(String reasoningContent) {
+        this.reasoningContent = reasoningContent;
     }
 
     public String getFinishReason() {

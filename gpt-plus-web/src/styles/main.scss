@@ -439,6 +439,10 @@ textarea {
   display: none;
 }
 
+.composer__sender-shell {
+  width: 100%;
+}
+
 .composer__sender {
   border-radius: 8px;
   background: #ffffff;
@@ -532,6 +536,42 @@ textarea {
   font-size: 0.78rem;
   font-weight: 600;
   line-height: 1.5;
+}
+
+.chat-reasoning {
+  margin-bottom: 10px;
+  border: 1px solid #d7dee9;
+  border-radius: 8px;
+  background: #f7f9fc;
+  overflow: hidden;
+}
+
+.chat-reasoning[open] {
+  background: #f4f8ff;
+  border-color: #c5d8ff;
+}
+
+.chat-reasoning__summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+  color: #35568a;
+  font-size: 0.82rem;
+  font-weight: 600;
+  user-select: none;
+}
+
+.chat-reasoning__summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-reasoning__content {
+  padding: 0 12px 12px;
+  color: #52606d;
+  font-size: 0.84rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chat-attachment-grid {

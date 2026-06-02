@@ -14,6 +14,7 @@ public enum ErrorCode {
     CHAT_MESSAGE_ALREADY_GENERATING(409, "当前消息正在生成中，请稍后再试"),
     CHAT_MESSAGE_NOT_INTERRUPTIBLE(409, "当前消息不支持继续生成"),
     CHAT_ATTACHMENT_NOT_FOUND(404, "图片附件不存在或不可用"),
+    CHAT_ATTACHMENT_READ_FAILED(500, "图片附件读取失败，请稍后重试"),
     CHAT_STREAM_ERROR(500, "流式输出异常"),
     CHAT_REGENERATE_NOT_IMPLEMENTED(501, "重新生成能力暂未接入"),
     FILE_IMAGE_EMPTY(400, "请先选择要上传的图片"),

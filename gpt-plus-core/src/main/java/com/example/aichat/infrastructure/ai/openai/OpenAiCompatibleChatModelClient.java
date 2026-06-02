@@ -219,30 +219,74 @@ public class OpenAiCompatibleChatModelClient implements ChatModelClient {
     /**
      * 拼装供应商请求消息，过滤空历史，避免把无效上下文传给模型。
      */
-    private List<Map<String, String>> buildMessages(ChatModelRequest request) {
-        List<Map<String, String>> messages = new ArrayList<>();
+    /**
+     * 组装兼容供应商请求消息；当前用户输入若带图片附件，则按多模态 content 数组透传。
+     */
+    private List<Map<String, Object>> buildMessages(ChatModelRequest request) {
+        List<Map<String, Object>> messages = new ArrayList<>();
         if (StringUtils.hasText(request.getSystemPrompt())) {
-            messages.add(this.newMessage("system", request.getSystemPrompt()));
+            messages.add(this.newTextMessage("system", request.getSystemPrompt()));
         }
         for (ChatModelMessage modelMessage : request.getMessages()) {
             if (modelMessage != null && StringUtils.hasText(modelMessage.getRole()) && StringUtils.hasText(modelMessage.getContent())) {
-                messages.add(this.newMessage(modelMessage.getRole(), modelMessage.getContent()));
+                messages.add(this.newTextMessage(modelMessage.getRole(), modelMessage.getContent()));
             }
         }
-        if (StringUtils.hasText(request.getUserContent())) {
-            messages.add(this.newMessage("user", request.getUserContent()));
+        if (StringUtils.hasText(request.getUserContent()) || (request.getUserImageUrls() != null && !request.getUserImageUrls().isEmpty())) {
+            messages.add(this.newUserMessage(request.getUserContent(), request.getUserImageUrls()));
         }
         return messages;
     }
 
     /**
-     * 构造供应商 message 对象，保持 role/content 字段顺序稳定。
+     * 构造纯文本供应商 message 对象，保持 role/content 字段顺序稳定。
      */
-    private Map<String, String> newMessage(String role, String content) {
-        Map<String, String> message = new LinkedHashMap<>();
+    private Map<String, Object> newTextMessage(String role, String content) {
+        Map<String, Object> message = new LinkedHashMap<>();
         message.put("role", role);
         message.put("content", content);
         return message;
+    }
+
+    /**
+     * 构造当前用户的多模态消息对象，优先保留文本，再追加 image_url 内容块。
+     */
+    private Map<String, Object> newUserMessage(String text, List<String> imageUrls) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("role", "user");
+        if (imageUrls == null || imageUrls.isEmpty()) {
+            message.put("content", text);
+            return message;
+        }
+
+        List<Map<String, Object>> content = new ArrayList<>();
+        if (StringUtils.hasText(text)) {
+            content.add(this.newTextPart(text));
+        }
+        for (String imageUrl : imageUrls) {
+            if (StringUtils.hasText(imageUrl)) {
+                content.add(this.newImageUrlPart(imageUrl));
+            }
+        }
+        message.put("content", content);
+        return message;
+    }
+
+    private Map<String, Object> newTextPart(String text) {
+        Map<String, Object> part = new LinkedHashMap<>();
+        part.put("type", "text");
+        part.put("text", text);
+        return part;
+    }
+
+    private Map<String, Object> newImageUrlPart(String imageUrl) {
+        Map<String, Object> imageUrlPayload = new LinkedHashMap<>();
+        imageUrlPayload.put("url", imageUrl);
+
+        Map<String, Object> part = new LinkedHashMap<>();
+        part.put("type", "image_url");
+        part.put("image_url", imageUrlPayload);
+        return part;
     }
 
     /**

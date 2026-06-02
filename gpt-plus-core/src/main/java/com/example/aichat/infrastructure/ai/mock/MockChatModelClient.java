@@ -22,11 +22,13 @@ public class MockChatModelClient implements ChatModelClient {
         String content = String.format(
                 "This is a mock streaming response for frontend integration.%n"
                         + "Current mode: %s%n"
+                        + "Deep thinking: %s%n"
                         + "User input: %s%n"
                         + "Resolved system prompt:%n"
                         + "%s%n"
                         + "Replace this mock flow with model adapter calls, database writes, usage logging, and session updates.",
                 currentMode,
+                Boolean.TRUE.equals(request.getEnableDeepThinking()) ? "enabled" : "disabled",
                 safeText(request.getUserContent()),
                 safeText(request.getSystemPrompt())
         );

@@ -23,6 +23,7 @@ import type {
   ChatStreamDeltaEvent,
   ChatStreamEndEvent,
   ChatStreamErrorEvent,
+  ChatStreamReasoningDeltaEvent,
   ChatStreamStartEvent,
   FileAssetItem,
   PageResponse,
@@ -53,6 +54,10 @@ export interface ChatMessage {
   id: number
   role: 'assistant' | 'user' | 'system'
   content: string
+  /** assistant 原生思考过程，用于消息区折叠展示。 */
+  reasoningContent?: string
+  /** assistant 消息是否开启了模型原生思考模式。 */
+  deepThinkingEnabled?: boolean
   modelName?: string | null
   createdAt: string
   status?: 'streaming' | 'done' | 'error' | 'interrupted'
@@ -182,6 +187,13 @@ function saveStoredChatModel(modelCode: string) {
   }
 }
 
+/**
+ * 前端展示层仍沿用 quick / expert 码值，但 expert 现在只表示开启模型原生思考模式。
+ */
+function isThinkingMode(mode: ChatModeCode) {
+  return mode === 'expert'
+}
+
 function normalizeSession(session: ChatSessionListItem): SessionPreview {
   const rawTitle = session.title || '未命名会话'
 
@@ -218,6 +230,8 @@ function normalizeMessage(message: ChatMessageItem, retryContent?: string, retry
     id: message.messageId,
     role: message.role,
     content: message.content,
+    reasoningContent: message.reasoningContent || '',
+    deepThinkingEnabled: message.deepThinkingEnabled ?? undefined,
     modelName: message.modelName,
     createdAt: formatRelativeTime(message.createdAt),
     status: normalizeMessageStatus(message.status),
@@ -484,6 +498,8 @@ export const useChatStore = defineStore('chat', () => {
               modelName: startEvent.modelName,
               createdAt: 'streaming',
               status: 'streaming',
+              reasoningContent: message.reasoningContent || '',
+              deepThinkingEnabled: startEvent.deepThinkingEnabled,
               // 流式开始时立即带上联网状态，避免等刷新列表才出现提示。
               webSearchEnabled: startEvent.webSearchEnabled,
               webSearchExecuted: startEvent.webSearchExecuted,
@@ -500,6 +516,8 @@ export const useChatStore = defineStore('chat', () => {
         id: nextMessageId,
         role: 'assistant',
         content: '',
+        reasoningContent: '',
+        deepThinkingEnabled: startEvent.deepThinkingEnabled,
         modelName: startEvent.modelName,
         createdAt: 'streaming',
         status: 'streaming',
@@ -575,6 +593,20 @@ export const useChatStore = defineStore('chat', () => {
                       ...message,
                       status: 'streaming',
                       content: `${message.content}${deltaEvent.delta}`,
+                    }
+                  : message,
+              )
+              break
+            }
+            case 'message_reasoning_delta': {
+              const reasoningDeltaEvent = JSON.parse(rawPayload) as ChatStreamReasoningDeltaEvent
+              activeStreamMessageId = reasoningDeltaEvent.messageId
+              messages.value = messages.value.map((message) =>
+                message.id === reasoningDeltaEvent.messageId
+                  ? {
+                      ...message,
+                      status: 'streaming',
+                      reasoningContent: `${message.reasoningContent || ''}${reasoningDeltaEvent.reasoningDelta}`,
                     }
                   : message,
               )
@@ -688,6 +720,7 @@ export const useChatStore = defineStore('chat', () => {
       sessionId,
       content: trimmed,
       modeCode: currentMode.value,
+      enableDeepThinking: isThinkingMode(currentMode.value),
       modelId:
         findChatModelByCode(availableModels.value, currentModel.value)?.id ??
         activeSession.value?.defaultModelId ??
@@ -717,6 +750,7 @@ export const useChatStore = defineStore('chat', () => {
       sessionId: currentSessionId.value,
       regenerateMessageId: messageId,
       modeCode: currentMode.value,
+      enableDeepThinking: isThinkingMode(currentMode.value),
       modelId:
         findChatModelByCode(availableModels.value, currentModel.value)?.id ??
         activeSession.value?.defaultModelId ??

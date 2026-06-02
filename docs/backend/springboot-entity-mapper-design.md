@@ -7,7 +7,7 @@
 - 当前数据库 **不创建外键约束**
 - 关联关系由应用层校验，说明文档见 [table-relations.md](/Users/ccy/CcyProjects/ai-code-gpt-plus/docs/db/table-relations.md)
 - 这里采用 `DO(Data Object)` 命名，专门表示数据库映射对象
-- `quick / expert` 模式建议通过“模式绑定提示词模板”实现
+- `quick / expert` 模式建议驱动模型原生思考开关，不建议再绑定默认提示词模板
 
 ## 推荐依赖
 
@@ -147,11 +147,11 @@ public class BaseDO implements Serializable {
 
 ## 模式与提示词模板设计建议
 
-针对 `quick / expert`，建议不要在代码里写很多 `if/else` 直接拼 prompt，而是抽成“模式 -> 默认提示词模板”的配置。
+针对 `quick / expert`，建议把模式语义固定为“是否开启模型原生思考能力”，不要再把模式写成“模式 -> 默认提示词模板”的配置。
 
 推荐解析顺序：
 
-1. 根据 `modeCode` 找到模式默认提示词
+1. 根据 `modeCode` 折算模型原生思考开关
 2. 追加 `chat_session.system_prompt`
 3. 追加本次请求的 `systemPrompt`
 
@@ -160,14 +160,14 @@ public class BaseDO implements Serializable {
 ```java
 public interface ChatPromptResolver {
 
-    String resolveSystemPrompt(String modeCode, String sessionPrompt, String requestPrompt);
+    String resolveSystemPrompt(String sessionPrompt, String requestPrompt);
 }
 ```
 
 这样做的好处：
 
-- 模式切换逻辑更清晰
-- 后续更容易改成数据库模板
+- 模式开关和提示词拼装职责更清晰
+- 原生思考能力可以按供应商协议单独翻译
 - 不会把 prompt 拼装散落在 Controller / Service / Provider Adapter 中
 
 ## 各表 Entity 设计
@@ -650,8 +650,7 @@ public class UserTokenUsageDO extends BaseDO {
 
 用途：
 
-- `quick` 绑定默认模板
-- `expert` 绑定默认模板
+- 维护通用附加提示词模板
 - 后续支持运营后台动态修改模板
 - 支持按模型、按业务场景扩展模板
 
@@ -965,7 +964,7 @@ src/main/resources/mapper/billing/UserTokenUsageMapper.xml
 
 1. `ChatSessionMapper` 校验会话是否存在且属于当前用户
 2. `ModelConfigMapper` 校验模型是否存在且启用
-3. `ChatPromptResolver` 根据 `modeCode` 解析默认提示词模板
+3. `ChatPromptResolver` 合并会话级和请求级附加提示词
 4. `ChatMessageMapper.selectMaxSeqNo(sessionId)` 获取下一条顺序号
 5. 插入用户消息
 6. 调用模型接口
@@ -1042,7 +1041,7 @@ mybatis-plus:
 - `JSON` 字段先映射为 `String`，首版最稳
 - 不在实体层做强关联对象嵌套，避免后续联表复杂化
 - 不依赖数据库外键，改由 Service 层做关系校验
-- `quick / expert` 优先通过提示词模板驱动，而不是写死成两套业务流程
+- `quick / expert` 优先驱动模型原生思考开关，而不是切换默认提示词模板
 
 如果后面你准备真正开后端项目，我下一步最合适的是继续补下面两项之一：
 

@@ -129,13 +129,14 @@ stateDiagram-v2
 flowchart TD
     A["前端收到 SSE 事件"] --> B{"事件类型"}
     B -- "message_start" --> C["插入或复用 assistant 消息"]
-    B -- "message_delta" --> D["向同一 messageId 追加 content"]
-    B -- "message_end" --> E["状态改为 done"]
-    B -- "message_error" --> F["状态改为 error"]
-    A --> G{"fetch / SSE 是否被 abort 或中断?"}
-    G -- "是且已有部分内容" --> H["本地先标记 interrupted"]
+    B -- "message_reasoning_delta" --> D["向同一 messageId 追加 reasoningContent"]
+    B -- "message_delta" --> E["向同一 messageId 追加 content"]
+    B -- "message_end" --> F["状态改为 done"]
+    B -- "message_error" --> G["状态改为 error"]
+    A --> K{"fetch / SSE 是否被 abort 或中断?"}
+    K -- "是且已有部分内容" --> H["本地先标记 interrupted"]
     H --> I["稍后重新 loadMessages 回查数据库真实状态"]
-    G -- "是但没有部分内容" --> J["显示发送失败"]
+    K -- "是但没有部分内容" --> J["显示发送失败"]
 ```
 
 ## 6. 后端关键决策点

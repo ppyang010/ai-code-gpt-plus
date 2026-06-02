@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -116,14 +117,7 @@ public class FileAssetServiceImpl implements FileAssetService {
             return List.of();
         }
 
-        List<FileAssetDO> assets = fileAssetMapper.selectList(new LambdaQueryWrapper<FileAssetDO>()
-                .eq(FileAssetDO::getUserId, userId)
-                .eq(FileAssetDO::getStatus, FILE_STATUS_ACTIVE)
-                .in(FileAssetDO::getId, normalizedFileIds));
-
-        if (assets.size() != normalizedFileIds.size()) {
-            throw new BizException(ErrorCode.CHAT_ATTACHMENT_NOT_FOUND);
-        }
+        List<FileAssetDO> assets = this.loadOwnedActiveAssets(userId, normalizedFileIds);
 
         Map<Long, FileAssetDO> assetMap = assets.stream()
                 .collect(Collectors.toMap(FileAssetDO::getId, asset -> asset));
@@ -131,6 +125,30 @@ public class FileAssetServiceImpl implements FileAssetService {
         return normalizedFileIds.stream()
                 .map(assetMap::get)
                 .map(this::toItem)
+                .toList();
+    }
+
+    @Override
+    public List<String> buildOwnedImageDataUrls(Long userId, List<Long> fileIds) {
+        if (fileIds == null || fileIds.isEmpty()) {
+            return List.of();
+        }
+
+        List<Long> normalizedFileIds = fileIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (normalizedFileIds.isEmpty()) {
+            return List.of();
+        }
+
+        List<FileAssetDO> ownedAssets = this.loadOwnedActiveAssets(userId, normalizedFileIds);
+        Map<Long, FileAssetDO> assetMap = ownedAssets.stream()
+                .collect(Collectors.toMap(FileAssetDO::getId, asset -> asset));
+
+        return normalizedFileIds.stream()
+                .map(assetMap::get)
+                .map(this::toModelImageDataUrl)
                 .toList();
     }
 
@@ -183,6 +201,38 @@ public class FileAssetServiceImpl implements FileAssetService {
         item.setFileUrl(asset.getFileUrl());
         item.setThumbnailUrl(asset.getFileUrl());
         return item;
+    }
+
+    /**
+     * 统一读取用户自己的有效附件，供消息发送和模型多模态组装复用。
+     */
+    private List<FileAssetDO> loadOwnedActiveAssets(Long userId, List<Long> normalizedFileIds) {
+        List<FileAssetDO> assets = fileAssetMapper.selectList(new LambdaQueryWrapper<FileAssetDO>()
+                .eq(FileAssetDO::getUserId, userId)
+                .eq(FileAssetDO::getStatus, FILE_STATUS_ACTIVE)
+                .in(FileAssetDO::getId, normalizedFileIds));
+
+        if (assets.size() != normalizedFileIds.size()) {
+            throw new BizException(ErrorCode.CHAT_ATTACHMENT_NOT_FOUND);
+        }
+        return assets;
+    }
+
+    /**
+     * 将图片文件内容编码成 `data:` URL，避免外部模型访问不到本机 `/api/file/content/**` 地址。
+     */
+    private String toModelImageDataUrl(FileAssetDO asset) {
+        if (asset == null || !StringUtils.hasText(asset.getStoragePath())) {
+            throw new BizException(ErrorCode.CHAT_ATTACHMENT_NOT_FOUND);
+        }
+        try {
+            byte[] bytes = Files.readAllBytes(Paths.get(asset.getStoragePath()));
+            String mimeType = StringUtils.hasText(asset.getContentType()) ? asset.getContentType() : "image/png";
+            return "data:" + mimeType + ";base64," + Base64.getEncoder().encodeToString(bytes);
+        } catch (IOException exception) {
+            log.warn("Failed to read chat image for model request fileId={}", asset.getId(), exception);
+            throw new BizException(ErrorCode.CHAT_ATTACHMENT_READ_FAILED);
+        }
     }
 
     private String extractExtension(String fileName) {
