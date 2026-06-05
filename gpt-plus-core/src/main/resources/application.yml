@@ -44,9 +44,20 @@ ai:
 
 app:
   file:
+    storage-type: ${FILE_STORAGE_TYPE:local}
     upload-root: ${FILE_UPLOAD_ROOT:${user.dir}/.local-storage/files}
     public-base-path: ${FILE_PUBLIC_BASE_PATH:/api/file/content}
     max-image-size-bytes: ${FILE_MAX_IMAGE_SIZE_BYTES:5242880}
+    oss:
+      region: ${FILE_OSS_REGION:}
+      endpoint: ${FILE_OSS_ENDPOINT:}
+      bucket: ${FILE_OSS_BUCKET:}
+      object-prefix: ${FILE_OSS_OBJECT_PREFIX:gpt-plus}
+      object-acl: ${FILE_OSS_OBJECT_ACL:private}
+      signed-url-expire-seconds: ${FILE_OSS_SIGNED_URL_EXPIRE_SECONDS:1800}
+      public-base-url: ${FILE_OSS_PUBLIC_BASE_URL:}
+      access-key-id: ${FILE_OSS_ACCESS_KEY_ID:}
+      access-key-secret: ${FILE_OSS_ACCESS_KEY_SECRET:}
   web-search:
     enabled: ${WEB_SEARCH_ENABLED:false}
     provider: ${WEB_SEARCH_PROVIDER:tavily}

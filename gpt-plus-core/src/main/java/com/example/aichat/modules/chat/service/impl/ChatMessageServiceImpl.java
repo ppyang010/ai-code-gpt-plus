@@ -177,8 +177,6 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         // 优先使用本次请求指定的模型；未指定时回落到会话默认模型，再由 resolveModel 做全局默认兜底。
         ModelConfigDO model = this.resolveModel(session, request.getModelId());
         List<FileAssetItemVO> attachments = this.fileAssetService.requireOwnedCompletedAssets(userId, request.getAttachmentIds());
-        // 图片附件会进一步转换为多模态 image_url 内容块，尝试真正透传给支持视觉输入的供应商。
-        List<String> userImageUrls = this.fileAssetService.buildOwnedImageDataUrls(userId, request.getAttachmentIds());
         // 思考模式现在只表示模型原生思考开关；显式字段优先，其次按请求 mode，再回落到会话 mode。
         Boolean enableDeepThinking = this.resolveEnableDeepThinking(
                 request.getEnableDeepThinking(),
@@ -204,8 +202,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 request.getContent(),
                 finalPrompt,
                 request.getModeCode(),
-                enableDeepThinking,
-                userImageUrls
+                enableDeepThinking
         );
 
         // seq_no 采用同一会话内递增序号：用户消息占当前序号，assistant 回答占下一个序号。
@@ -274,11 +271,6 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
         ChatMessageDO previousUserMessage = this.getPreviousUserMessage(session.getId(), assistantMessage.getSeqNo());
         ModelConfigDO model = this.resolveModel(session, request.getModelId() != null ? request.getModelId() : assistantMessage.getModelId());
-        List<Long> previousAttachmentIds = this.parseMessageAttachments(previousUserMessage.getMetadata()).stream()
-                .map(FileAssetItemVO::getFileId)
-                .filter(Objects::nonNull)
-                .toList();
-        List<String> userImageUrls = this.fileAssetService.buildOwnedImageDataUrls(userId, previousAttachmentIds);
         Boolean enableDeepThinking = this.resolveEnableDeepThinking(
                 request.getEnableDeepThinking(),
                 request.getModeCode(),
@@ -298,7 +290,6 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 basePrompt,
                 request.getModeCode(),
                 enableDeepThinking,
-                userImageUrls,
                 assistantMessage
         );
 
@@ -669,8 +660,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             String userContent,
             String finalPrompt,
             String requestModeCode,
-            Boolean enableDeepThinking,
-            List<String> userImageUrls
+            Boolean enableDeepThinking
     ) {
         return this.buildModelRequest(
                 session,
@@ -680,7 +670,6 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 finalPrompt,
                 requestModeCode,
                 enableDeepThinking,
-                userImageUrls,
                 this.loadContextMessages(session.getId(), CONTEXT_MESSAGE_LIMIT)
         );
     }
@@ -695,7 +684,6 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             String basePrompt,
             String requestModeCode,
             Boolean enableDeepThinking,
-            List<String> userImageUrls,
             ChatMessageDO interruptedAssistantMessage
     ) {
         String resumePrompt = this.buildResumePrompt(basePrompt, interruptedAssistantMessage.getContent());
@@ -707,7 +695,6 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 resumePrompt,
                 requestModeCode,
                 enableDeepThinking,
-                userImageUrls,
                 this.loadContextMessagesBeforeSeqNo(session.getId(), interruptedAssistantMessage.getSeqNo(), CONTEXT_MESSAGE_LIMIT)
         );
     }
@@ -723,7 +710,6 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             String finalPrompt,
             String requestModeCode,
             Boolean enableDeepThinking,
-            List<String> userImageUrls,
             List<ChatModelMessage> contextMessages
     ) {
         ChatModelRequest request = new ChatModelRequest();
@@ -740,7 +726,6 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         request.setEnableDeepThinking(enableDeepThinking);
         request.setSystemPrompt(finalPrompt);
         request.setUserContent(userContent);
-        request.setUserImageUrls(userImageUrls);
         request.setMessages(contextMessages);
         return request;
     }

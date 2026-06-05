@@ -1,6 +1,5 @@
 package com.example.aichat.infrastructure.ai;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -32,10 +31,8 @@ public class ChatModelRequest {
     private String systemPrompt;
     /** 当前用户输入正文，单独传给客户端避免和历史上下文重复。 */
     private String userContent;
-    /** 当前用户输入关联的图片附件，转成多模态 `image_url` 内容块后随本次 user message 一起发送。 */
-    private List<String> userImageUrls = new ArrayList<>();
     /** 已排序的历史上下文消息，供模型连续理解当前会话。 */
-    private List<ChatModelMessage> messages = new ArrayList<>();
+    private List<ChatModelMessage> messages = List.of();
 
     public Long getSessionId() {
         return sessionId;
@@ -131,14 +128,6 @@ public class ChatModelRequest {
 
     public void setUserContent(String userContent) {
         this.userContent = userContent;
-    }
-
-    public List<String> getUserImageUrls() {
-        return userImageUrls;
-    }
-
-    public void setUserImageUrls(List<String> userImageUrls) {
-        this.userImageUrls = userImageUrls;
     }
 
     public List<ChatModelMessage> getMessages() {

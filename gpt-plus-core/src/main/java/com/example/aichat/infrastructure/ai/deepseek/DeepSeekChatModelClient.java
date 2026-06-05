@@ -226,7 +226,7 @@ public class DeepSeekChatModelClient implements ChatModelClient {
     }
 
     /**
-     * 组装 DeepSeek 请求消息；当前用户输入若带图片附件，则按 OpenAI-compatible 多模态 content 数组透传。
+     * 组装 DeepSeek 请求消息；当前版本只发送文本内容，图片附件仍仅作为聊天附件保存和回显。
      */
     private List<Map<String, Object>> buildMessages(ChatModelRequest request) {
         List<Map<String, Object>> messages = new ArrayList<>();
@@ -239,8 +239,8 @@ public class DeepSeekChatModelClient implements ChatModelClient {
                 messages.add(this.newTextMessage(modelMessage.getRole(), modelMessage.getContent()));
             }
         }
-        if (StringUtils.hasText(request.getUserContent()) || (request.getUserImageUrls() != null && !request.getUserImageUrls().isEmpty())) {
-            messages.add(this.newUserMessage(request.getUserContent(), request.getUserImageUrls()));
+        if (StringUtils.hasText(request.getUserContent())) {
+            messages.add(this.newTextMessage("user", request.getUserContent()));
         }
         return messages;
     }
@@ -253,47 +253,6 @@ public class DeepSeekChatModelClient implements ChatModelClient {
         message.put("role", role);
         message.put("content", content);
         return message;
-    }
-
-    /**
-     * 构造当前用户的多模态消息对象，优先保留文本，再追加 image_url 内容块。
-     */
-    private Map<String, Object> newUserMessage(String text, List<String> imageUrls) {
-        Map<String, Object> message = new LinkedHashMap<>();
-        message.put("role", "user");
-        if (imageUrls == null || imageUrls.isEmpty()) {
-            message.put("content", text);
-            return message;
-        }
-
-        List<Map<String, Object>> content = new ArrayList<>();
-        if (StringUtils.hasText(text)) {
-            content.add(this.newTextPart(text));
-        }
-        for (String imageUrl : imageUrls) {
-            if (StringUtils.hasText(imageUrl)) {
-                content.add(this.newImageUrlPart(imageUrl));
-            }
-        }
-        message.put("content", content);
-        return message;
-    }
-
-    private Map<String, Object> newTextPart(String text) {
-        Map<String, Object> part = new LinkedHashMap<>();
-        part.put("type", "text");
-        part.put("text", text);
-        return part;
-    }
-
-    private Map<String, Object> newImageUrlPart(String imageUrl) {
-        Map<String, Object> imageUrlPayload = new LinkedHashMap<>();
-        imageUrlPayload.put("url", imageUrl);
-
-        Map<String, Object> part = new LinkedHashMap<>();
-        part.put("type", "image_url");
-        part.put("image_url", imageUrlPayload);
-        return part;
     }
 
     @SuppressWarnings("unchecked")

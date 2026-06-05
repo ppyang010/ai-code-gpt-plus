@@ -15,6 +15,21 @@ ai:
         api-key: your_openrouter_api_key
 
 app:
+  file:
+    storage-type: local
+    upload-root: ${user.dir}/.local-storage/files
+    public-base-path: /api/file/content
+    max-image-size-bytes: 5242880
+    oss:
+      region: oss-cn-hangzhou
+      endpoint: https://oss-cn-hangzhou.aliyuncs.com
+      bucket: your_bucket_name
+      object-prefix: gpt-plus
+      object-acl: private
+      signed-url-expire-seconds: 1800
+      public-base-url: https://your_bucket_name.oss-cn-hangzhou.aliyuncs.com
+      access-key-id: your_access_key_id
+      access-key-secret: your_access_key_secret
   web-search:
     enabled: false
     provider: tavily
