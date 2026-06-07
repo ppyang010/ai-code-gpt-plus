@@ -17,6 +17,9 @@
 - `api_call_log`：模型调用日志表
 - `user_balance`：用户余额表，首版只预留
 - `user_token_usage`：用户 token 消耗表，首版只记录
+- `admin_user`：后台管理用户表
+- `admin_login_log`：后台登录日志表
+- `prompt_template`：附加提示词模板表
 
 ## 表关联关系
 
@@ -107,6 +110,18 @@
 - `user_token_usage.model_id -> model_config.id`
 - 使用场景：按模型统计用户的 token 使用量和预估成本
 
+### 15. 后台管理员与登录日志
+
+- `admin_login_log.admin_user_id -> admin_user.id`
+- 关系：一个后台管理员可以对应多条登录日志，失败日志允许为空管理员 ID
+- 使用场景：后台登录审计、失败排查和最近登录时间追踪
+
+### 16. 附加提示词模板
+
+- `prompt_template` 当前为独立配置表，不依赖其他主表
+- 关系：模板通过 `template_code` 和 `template_scope` 在应用层选择与启停
+- 使用场景：后台维护通用附加提示词模板，后续由 `ChatPromptResolver` 按规则读取
+
 ## 推荐的应用层约束
 
 因为当前不使用外键，建议后端至少实现下面这些校验：
@@ -118,6 +133,9 @@
 - 写入 `api_call_log` 时，校验 `user_id`、`provider_id`、`model_id` 的合法性
 - 写入 `user_balance` 时，保证每个用户只有一条余额记录
 - 写入 `user_token_usage` 时，尽量带上 `api_call_log_id` 方便后续追踪
+- 写入 `admin_login_log` 时，失败场景允许 `admin_user_id` 为空，但需要保留 `login_username`
+- 写入 `prompt_template` 时，保证 `template_code` 全局唯一，`template_content` 非空
+- 启用 `prompt_template` 前，校验 `template_scope` 是否属于系统支持的模板作用域
 
 ## 推荐查询路径
 
@@ -145,15 +163,27 @@
 - `api_call_log`
 - `model_config`
 
+### 查询后台登录审计
+
+- `admin_user`
+- `admin_login_log`
+
+### 查询附加提示词模板
+
+- `prompt_template`
+
 ## 当前已接入与后续可扩展表
 
 当前已接入：
 
 - `file_asset`：聊天图片附件上传、预览和消息引用
 
+已在数据库文档中补齐、等待后续代码接入的表：
+
+- `admin_user`：后台管理用户
+- `admin_login_log`：后台登录日志
+- `prompt_template`：通用附加提示词模板
+
 后续如果要继续迭代，建议补充这些表：
 
-- `prompt_template`：通用附加提示词模板
-- `login_log`：登录日志
 - `recharge_order`：充值订单
-- `admin_user`：后台管理用户

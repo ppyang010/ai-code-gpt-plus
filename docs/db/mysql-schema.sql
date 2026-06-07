@@ -194,3 +194,116 @@ CREATE TABLE `user_token_usage` (
   KEY `idx_user_token_usage_provider_id` (`provider_id`),
   KEY `idx_user_token_usage_model_id` (`model_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户token消耗表(首版只记录，不做额度限制)';
+
+
+CREATE TABLE `admin_user` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `username` VARCHAR(64) NOT NULL COMMENT '管理员用户名',
+  `password_hash` VARCHAR(255) NOT NULL COMMENT '管理员密码哈希',
+  `nickname` VARCHAR(64) DEFAULT NULL COMMENT '管理员昵称',
+  `email` VARCHAR(128) DEFAULT NULL COMMENT '管理员邮箱',
+  `mobile` VARCHAR(32) DEFAULT NULL COMMENT '管理员手机号',
+  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '状态: 1正常 0禁用',
+  `last_login_at` DATETIME DEFAULT NULL COMMENT '最后登录时间',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_admin_user_username` (`username`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='后台管理员表';
+
+
+CREATE TABLE `admin_login_log` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `login_username` VARCHAR(64) NOT NULL COMMENT '登录账号',
+  `admin_user_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '管理员ID，登录失败时可为空',
+  `success_flag` TINYINT NOT NULL DEFAULT 0 COMMENT '是否成功: 1成功 0失败',
+  `failure_reason` VARCHAR(255) DEFAULT NULL COMMENT '失败原因',
+  `login_ip` VARCHAR(64) DEFAULT NULL COMMENT '登录IP',
+  `user_agent` VARCHAR(512) DEFAULT NULL COMMENT 'User-Agent',
+  `login_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '登录时间',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_admin_login_log_login_username` (`login_username`),
+  KEY `idx_admin_login_log_admin_user_id` (`admin_user_id`),
+  KEY `idx_admin_login_log_login_at` (`login_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='后台登录日志表';
+
+
+CREATE TABLE `prompt_template` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `template_code` VARCHAR(64) NOT NULL COMMENT '模板编码',
+  `template_name` VARCHAR(128) NOT NULL COMMENT '模板名称',
+  `template_scope` VARCHAR(32) NOT NULL DEFAULT 'global_append' COMMENT '模板作用域: global_append/scene_append',
+  `template_content` TEXT NOT NULL COMMENT '模板内容',
+  `status` TINYINT NOT NULL DEFAULT 0 COMMENT '状态: 1启用 0禁用',
+  `sort_no` INT NOT NULL DEFAULT 0 COMMENT '排序',
+  `remark` VARCHAR(255) DEFAULT NULL COMMENT '备注',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_prompt_template_code` (`template_code`),
+  KEY `idx_prompt_template_scope_status` (`template_scope`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='附加提示词模板表';
+
+
+-- 管理后台初始化数据示例
+-- 执行前请先离线生成管理员密码哈希，并替换下面的占位值；不要把明文密码写入可提交文件。
+SET @admin_password_hash = 'REPLACE_WITH_PRECOMPUTED_PASSWORD_HASH';
+
+INSERT INTO admin_user (
+  username,
+  password_hash,
+  nickname,
+  email,
+  mobile,
+  status
+)
+VALUES (
+  'admin',
+  @admin_password_hash,
+  '系统管理员',
+  'admin@example.com',
+  '13800000000',
+  1
+)
+ON DUPLICATE KEY UPDATE
+  nickname = VALUES(nickname),
+  email = VALUES(email),
+  mobile = VALUES(mobile),
+  status = VALUES(status);
+
+INSERT INTO prompt_template (
+  template_code,
+  template_name,
+  template_scope,
+  template_content,
+  status,
+  sort_no,
+  remark
+)
+VALUES
+  (
+    'global_append_default',
+    '全局默认附加提示词',
+    'global_append',
+    '请优先给出结构化、可执行的答案；必要时补充前置条件、风险和下一步建议。',
+    0,
+    10,
+    '首版默认关闭，待后台模板生效逻辑接入后再由管理员启用'
+  ),
+  (
+    'code_task_append',
+    '代码任务附加提示词示例',
+    'scene_append',
+    '回答代码实现问题时，优先给出可以直接落地的改动方案，并说明影响范围和注意事项。',
+    0,
+    20,
+    '首版示例模板，默认关闭，避免在聊天主链路未接模板逻辑前隐式改变回答风格'
+  )
+ON DUPLICATE KEY UPDATE
+  template_name = VALUES(template_name),
+  template_scope = VALUES(template_scope),
+  template_content = VALUES(template_content),
+  status = VALUES(status),
+  sort_no = VALUES(sort_no),
+  remark = VALUES(remark);

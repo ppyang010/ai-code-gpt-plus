@@ -43,6 +43,12 @@ ai:
         api-key: ${OPENAI_COMPATIBLE_OPENROUTER_API_KEY:}
 
 app:
+  admin-auth:
+    token-secret: ${ADMIN_AUTH_TOKEN_SECRET:local-admin-auth-secret-change-me}
+    token-issuer: ${ADMIN_AUTH_TOKEN_ISSUER:gpt-plus-admin}
+    token-expire-seconds: ${ADMIN_AUTH_TOKEN_EXPIRE_SECONDS:604800}
+  admin-security:
+    encryption-secret: ${ADMIN_SECURITY_ENCRYPTION_SECRET:local-admin-security-secret-change-me}
   file:
     storage-type: ${FILE_STORAGE_TYPE:local}
     upload-root: ${FILE_UPLOAD_ROOT:${user.dir}/.local-storage/files}

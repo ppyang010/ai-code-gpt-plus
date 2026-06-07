@@ -15,6 +15,12 @@ ai:
         api-key: your_openrouter_api_key
 
 app:
+  admin-auth:
+    token-secret: your_admin_auth_token_secret
+    token-issuer: gpt-plus-admin
+    token-expire-seconds: 604800
+  admin-security:
+    encryption-secret: your_admin_security_encryption_secret
   file:
     storage-type: local
     upload-root: ${user.dir}/.local-storage/files
